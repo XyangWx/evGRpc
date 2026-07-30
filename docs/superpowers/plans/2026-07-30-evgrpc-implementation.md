@@ -244,7 +244,7 @@ add_custom_target(evgrpc_proto_gen
     --proto_path=${EVGRPC_PROTO_DIR}
     --cpp_out=${EVGRPC_PROTO_GEN_DIR}
     --grpc_out=${EVGRPC_PROTO_GEN_DIR}
-    --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+    --plugin=protoc-gen-grpc=$<TARGET_FILE:grpc_cpp_plugin>
     ${EVGRPC_PROTO_FILES}
   DEPENDS ${EVGRPC_PROTO_FILES}
   COMMENT "Generating protobuf + gRPC stubs"
@@ -2380,6 +2380,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpqxx-dev libpq-dev libssl-dev \
     libgrpc++-dev libprotobuf-dev protobuf-compiler-grpc \
     libcurl4-openssl-dev \
+    libc-ares-dev libre2-dev libabsl-dev \
     git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
