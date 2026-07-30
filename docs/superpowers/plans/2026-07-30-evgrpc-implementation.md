@@ -695,11 +695,11 @@ void PgPool::release(std::unique_ptr<pqxx::connection> conn) {
 Create `src/db/CMakeLists.txt`:
 ```cmake
 add_library(evgrpc_db pool.cc)
-target_link_libraries(evgrpc_db PUBLIC pqxx::pqxx)
+target_link_libraries(evgrpc_db PUBLIC libpqxx::pqxx)
 target_include_directories(evgrpc_db PUBLIC ${CMAKE_SOURCE_DIR}/src)
 ```
 
-Append `add_subdirectory(db)` to `src/CMakeLists.txt`. Link `evgrpc_db` into `evgrpc_server`. Append `tests/unit/test_pool.cc` to `tests/CMakeLists.txt` and link `evgrpc_db` + `pqxx::pqxx`.
+Append `add_subdirectory(db)` to `src/CMakeLists.txt`. Link `evgrpc_db` into `evgrpc_server`. Append `tests/unit/test_pool.cc` to `tests/CMakeLists.txt` and link `evgrpc_db` + `libpqxx::pqxx`.
 
 - [ ] **Step 4: Run tests**
 
