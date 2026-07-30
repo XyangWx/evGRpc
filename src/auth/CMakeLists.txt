@@ -1,6 +1,7 @@
 add_library(evgrpc_auth
   jwt_validator.cc
   jwks_cache.cc
+  authenticate.cc   # Task 9 — per-RPC Bearer JWT helper
 )
 
 # jwt-cpp is header-only and is exposed by the cmake/deps.cmake
@@ -18,6 +19,11 @@ target_link_libraries(evgrpc_auth PUBLIC jwt-cpp::jwt-cpp)
 target_link_libraries(evgrpc_auth PUBLIC
   CURL::libcurl
   nlohmann_json::nlohmann_json
+  # Task 9's Authenticate helper uses grpc::Status and grpc::string_ref
+  # (from <grpcpp/support/status.h> and <grpcpp/support/string_ref.h>).
+  # We only need the public headers + grpc++ static lib — no codegen, no
+  # protobuf runtime symbol emission.
+  grpc++
 )
 
 # Tests reach into #include "auth/jwt_validator.h" and

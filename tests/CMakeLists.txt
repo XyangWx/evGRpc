@@ -7,6 +7,7 @@ add_executable(evgrpc_tests
   unit/test_error.cc
   unit/test_jwt_validator.cc
   unit/test_jwks_cache.cc
+  unit/test_authenticate.cc
 )
 target_link_libraries(evgrpc_tests PRIVATE
   gtest

@@ -1616,117 +1616,205 @@ git commit -m "feat(auth): JWKS cache with TTL refresh + libcurl fetch + JWK→P
 
 ---
 
-## Task 9: Auth gRPC Interceptor
+## Task 9: Auth Bearer-Token Helper (per-RPC)
 
 **Files:**
-- Create: `src/auth/auth_interceptor.h`
-- Create: `src/auth/auth_interceptor.cc`
-- Modify: `src/auth/CMakeLists.txt`
-- Create: `tests/integration/test_auth_e2e.cc` (uses test server fixture; full fixture lives in Task 22 — for now, test interceptor in isolation)
+- Create: `src/auth/authenticate.h`
+- Create: `src/auth/authenticate.cc`
+- Modify: `src/auth/CMakeLists.txt` — add `authenticate.cc` to `evgrpc_auth`
+- Create: `tests/unit/test_authenticate.cc`
+
+**Background (post v1.62 API verification, 2026-07-31):**
+
+The original brief specified a `grpc::experimental::ServerInterceptorFactoryInterface`
+that short-circuited RPCs at `InterceptionHookPoints::PRE_PROCESS_RPC` via
+`methods->Return(grpc::Status{...})`. Verified against gRPC v1.62.0
+(`build/_deps/grpc-src/include/grpcpp/support/interceptor.h`) and the current
+master branch's raw header (`raw.githubusercontent.com/grpc/grpc/master/...`):
+**neither `PRE_PROCESS_RPC` nor `InterceptorBatchMethods::Return(Status)` exist in
+any released gRPC C++ version** (v1.62 → master/1.83). `Hijack()` still asserts
+`client_rpc_info() != nullptr` (client-only) in the master branch, so a server-side
+auth interceptor that can reject the call before the handler runs is **not a thing
+gRPC C++ supports today**. (The Task-9 BLOCKED report's Option 1 recommendation —
+"bump gRPC to 1.66+ and accept the rebuild" — was wrong; verified by re-fetching
+the headers rather than relying on the subagent's "1.65/1.66 added Return" claim.)
+
+So the design pivots to **per-method auth guard**: a free function
+`evgrpc::Authenticate(client_metadata, validator)` that each generated service
+method calls as its first line. JWT validation is RS256 + iss/aud/exp (Task 7),
+backed by the JWKS cache (Task 8), and is cheap enough to redo per call (cache
+lookup is a hash miss-or-hit, no network). The interceptor design is dropped.
+Downstream Tasks 10–19 (each generated service method) prepend the `Authenticate`
+call.
+
+**Interfaces:**
+- Produces free function `evgrpc::Authenticate(metadata, validator) -> grpc::Status`.
+- `metadata` is the `client_metadata()` multimap of incoming initial metadata (so
+  we take it in by reference — trivially unit-testable without a `ServerContext`
+  mock).
+- `validator` is a `const evgrpc::JwtValidator&` (Task 7).
+- Returns `grpc::Status::OK` on a valid Bearer token, or
+  `grpc::Status(UNAUTHENTICATED, "<reason>")` on any failure.
 
 - [ ] **Step 1: Write the failing test**
 
+`tests/unit/test_authenticate.cc`:
 ```cpp
 #include <gtest/gtest.h>
-#include "auth/auth_interceptor.h"
+#include "auth/authenticate.h"
 #include "auth/jwt_validator.h"
-#include "auth/jwks_cache.h"
 #include "fixtures/jwt_test_keys.h"
-#include <grpcpp/grpcpp.h>
+#include <map>
+#include <string>
+#include "gmock/gmock.h"
 
-using evgrpc::AuthInterceptor;
+using evgrpc::Authenticate;
 using evgrpc::JwtValidator;
-using evgrpc::JwksCache;
 using evgrpc::test::GenerateRsaKeyPair;
+using evgrpc::test::RsaKeyPair;
 using evgrpc::test::SignJwt;
 
-TEST(AuthInterceptorTest, NoMetadataReturnsUnauthenticated) {
-    auto interceptor = AuthInterceptor{nullptr};
-    auto rc = interceptor.Intercept(nullptr);  // simplified — see impl
-    EXPECT_EQ(rc.error_code(), grpc::StatusCode::UNAUTHENTICATED);
+namespace {
+
+std::multimap<grpc::string_ref, grpc::string_ref> WithAuth(
+    const std::string& header_value) {
+  std::multimap<grpc::string_ref, grpc::string_ref> md;
+  md.emplace(grpc::string_ref("authorization"),
+             grpc::string_ref(header_value.data(), header_value.size()));
+  return md;
+}
+
+}  // namespace
+
+class AuthenticateTest : public ::testing::Test {
+ protected:
+  RsaKeyPair key = GenerateRsaKeyPair("test-kid");
+  JwtValidator v = JwtValidator{
+      .issuer = "https://idp.test",
+      .audience = "evgrpc",
+      .resolve_key = [this](const std::string& kid) -> std::optional<std::string> {
+        if (kid == key.kid) return key.pem_public;
+        return std::nullopt;
+      }};
+};
+
+TEST_F(AuthenticateTest, NoAuthHeaderReturnsUnauthenticated) {
+  std::multimap<grpc::string_ref, grpc::string_ref> md;
+  auto status = Authenticate(md, v);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAUTHENTICATED);
+  EXPECT_THAT(status.error_message(), ::testing::HasSubstr("missing"));
+}
+
+TEST_F(AuthenticateTest, NonBearerAuthReturnsUnauthenticated) {
+  auto status = Authenticate(WithAuth("Basic dXNlcjpwYXNz"), v);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAUTHENTICATED);
+  EXPECT_THAT(status.error_message(), ::testing::HasSubstr("Bearer"));
+}
+
+TEST_F(AuthenticateTest, ValidTokenReturnsOk) {
+  auto token = SignJwt(key, "https://idp.test", "evgrpc", 3600);
+  auto status = Authenticate(WithAuth("Bearer " + token), v);
+  EXPECT_TRUE(status.ok()) << status.error_message();
+}
+
+TEST_F(AuthenticateTest, ExpiredTokenReturnsUnauthenticated) {
+  auto token = SignJwt(key, "https://idp.test", "evgrpc", -10);
+  auto status = Authenticate(WithAuth("Bearer " + token), v);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAUTHENTICATED);
+}
+
+TEST_F(AuthenticateTest, WrongIssuerReturnsUnauthenticated) {
+  auto token = SignJwt(key, "https://evil.test", "evgrpc", 3600);
+  auto status = Authenticate(WithAuth("Bearer " + token), v);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAUTHENTICATED);
+}
+
+TEST_F(AuthenticateTest, EmptyBearerReturnsUnauthenticated) {
+  auto status = Authenticate(WithAuth("Bearer "), v);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAUTHENTICATED);
 }
 ```
 
+(Expected: 6 tests fail. The helper doesn't exist yet.)
+
 - [ ] **Step 2: Implement**
 
-`src/auth/auth_interceptor.h`:
+`src/auth/authenticate.h`:
 ```cpp
 #pragma once
-#include <grpcpp/support/interceptor.h>
-#include <memory>
+#include <grpcpp/support/status.h>
+#include <grpcpp/support/string_ref.h>
+#include <map>
 #include "auth/jwt_validator.h"
 
 namespace evgrpc {
 
-class AuthInterceptor : public grpc::experimental::ServerInterceptorFactoryInterface {
-public:
-    explicit AuthInterceptor(std::shared_ptr<JwtValidator> validator);
-    grpc::experimental::Interceptor* CreateServerInterceptor(
-        grpc::experimental::ServerRpcInfo* info) override;
-private:
-    std::shared_ptr<JwtValidator> validator_;
-};
-
-class AuthServerInterceptor : public grpc::experimental::Interceptor {
-public:
-    explicit AuthServerInterceptor(std::shared_ptr<JwtValidator> validator)
-        : validator_(std::move(validator)) {}
-    void Intercept(grpc::experimental::InterceptorBatchMethods* methods) override;
-private:
-    std::shared_ptr<JwtValidator> validator_;
-};
+// Per-RPC bearer-token authentication helper.
+//
+// Each generated service method calls this as its first action:
+//   auto status = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
+//   if (!status.ok()) return status;
+//
+// `client_metadata` is the initial-metadata multimap from the gRPC call
+// (typically `grpc::ServerContext::client_metadata()`). Taking it as a
+// reference (not a `ServerContext*`) makes this helper trivially
+// unit-testable without constructing a gRPC server.
+//
+// Returns:
+//   - `grpc::Status::OK` if `Authorization: Bearer <token>` is present
+//     and the token passes JWT validation (RS256, iss, aud, exp).
+//   - `grpc::Status(UNAUTHENTICATED, "<reason>")` on any failure:
+//     missing header, non-Bearer scheme, malformed token, signature
+//     mismatch, expired token, unknown `kid`, wrong issuer/audience.
+//
+// All validation is fail-closed; the helper never throws.
+grpc::Status Authenticate(
+    const std::multimap<grpc::string_ref, grpc::string_ref>& client_metadata,
+    const JwtValidator& validator);
 
 }  // namespace evgrpc
 ```
 
-`src/auth/auth_interceptor.cc`:
+`src/auth/authenticate.cc`:
 ```cpp
-#include "auth/auth_interceptor.h"
+#include "auth/authenticate.h"
+
+#include <string>
+#include <string_view>
 
 namespace evgrpc {
 
-AuthInterceptor::AuthInterceptor(std::shared_ptr<JwtValidator> validator)
-    : validator_(std::move(validator)) {}
-
-grpc::experimental::Interceptor* AuthInterceptor::CreateServerInterceptor(
-    grpc::experimental::ServerRpcInfo*) {
-    return new AuthServerInterceptor(validator_);
-}
-
 namespace {
-grpc::Status MakeStatus(grpc::StatusCode code, const std::string& msg) {
-    return grpc::Status(code, msg);
-}
+constexpr char kAuthHeader[] = "authorization";
+constexpr char kBearerPrefix[] = "Bearer ";
 }  // namespace
 
-void AuthServerInterceptor::Intercept(grpc::experimental::InterceptorBatchMethods* methods) {
-    if (methods->QueryInterceptionHookPoint(
-            grpc::experimental::InterceptionHookPoints::PRE_PROCESS_RPC)) {
-        auto* md = methods->GetRecvInitialMetadata();
-        if (!md) {
-            methods->Return(Status{grpc::StatusCode::UNAUTHENTICATED, "no metadata"});
-            return;
-        }
-        auto it = md->find("authorization");
-        if (it == md->end()) {
-            methods->Return(Status{grpc::StatusCode::UNAUTHENTICATED, "missing authorization"});
-            return;
-        }
-        const std::string& val = it->second;
-        const std::string prefix = "Bearer ";
-        if (val.size() < prefix.size() || val.substr(0, prefix.size()) != prefix) {
-            methods->Return(Status{grpc::StatusCode::UNAUTHENTICATED, "invalid authorization header"});
-            return;
-        }
-        std::string token = val.substr(prefix.size());
-        auto claims = validator_->Validate(token);
-        if (!claims) {
-            methods->Return(Status{grpc::StatusCode::UNAUTHENTICATED, "token validation failed"});
-            return;
-        }
-        // (Optional: stash claims into per-request context for audit logging.)
-    }
-    methods->Proceed();
+grpc::Status Authenticate(
+    const std::multimap<grpc::string_ref, grpc::string_ref>& client_metadata,
+    const JwtValidator& validator) {
+  auto it = client_metadata.find(grpc::string_ref(kAuthHeader));
+  if (it == client_metadata.end()) {
+    return grpc::Status(grpc::StatusCode::UNAUTHENTICATED,
+                        "missing authorization header");
+  }
+
+  // zero-copy grpc::string_ref → std::string_view for safe prefix/suffix work
+  const std::string_view val(it->second.data(), it->second.size());
+  constexpr std::string_view prefix(kBearerPrefix);
+
+  if (val.size() <= prefix.size() ||
+      val.substr(0, prefix.size()) != prefix) {
+    return grpc::Status(grpc::StatusCode::UNAUTHENTICATED,
+                        "authorization must be 'Bearer <token>'");
+  }
+
+  const std::string token(val.substr(prefix.size()));
+  auto claims = validator.Validate(token);
+  if (!claims.has_value()) {
+    return grpc::Status(grpc::StatusCode::UNAUTHENTICATED,
+                        "invalid bearer token");
+  }
+  return grpc::Status::OK;
 }
 
 }  // namespace evgrpc
@@ -1734,12 +1822,38 @@ void AuthServerInterceptor::Intercept(grpc::experimental::InterceptorBatchMethod
 
 - [ ] **Step 3: Wire + commit**
 
-Append `auth_interceptor.cc` to `evgrpc_auth`. Add integration test to `tests/integration/CMakeLists.txt`. Run via the test server fixture (Task 22) once that task lands.
+Append `authenticate.cc` to the `evgrpc_auth` library in `src/auth/CMakeLists.txt`.
+Add `unit/test_authenticate.cc` to `tests/CMakeLists.txt`.
 
 ```bash
-git add src/auth/ tests/integration/
-git commit -m "feat(auth): gRPC ServerInterceptor rejects requests without valid bearer token"
+cmake --build build --target evgrpc_server --target evgrpc_tests  # incremental
+./build/tests/evgrpc_tests --gtest_filter='AuthenticateTest.*'     # 6 pass
+./build/tests/evgrpc_tests                                         # all 22 pass (16 prior + 6 new)
+
+git add src/auth/ tests/unit/test_authenticate.cc docs/superpowers/plans/2026-07-30-evgrpc-implementation.md
+git commit -m "feat(auth): per-RPC Authenticate helper (Bearer JWT, drop interceptor)"
 ```
+
+---
+
+> **Applies to every service method in Tasks 10–19:** since Task 9 abandoned
+> the centralized interceptor (the brief's APIs — `PRE_PROCESS_RPC` and
+> `methods->Return(Status)` — don't exist in any gRPC C++ version), every
+> generated service method body must **start** with the auth guard below.
+> Service constructors should keep a `JwtValidator* validator_` member
+> (injected at wire-up in Task 15), and the first line of every RPC handler
+> is:
+>
+> ```cpp
+> grpc::Status VehicleServiceImpl::CreateVehicle(grpc::ServerContext* ctx,
+>         const CreateVehicleRequest* req, Vehicle* resp) {
+>   auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
+>   if (!auth.ok()) return auth;
+>   try {
+>     auto conn = pool_->acquire();
+>     pqxx::work tx(*conn);
+>     /* ... existing impl unchanged from here ... */
+> ```
 
 ---
 
