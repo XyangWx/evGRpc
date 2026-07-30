@@ -1,2 +1,121 @@
 syntax = "proto3";
 package evgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "evgrpc/common.proto";
+import "evgrpc/charging.proto";
+
+message VehicleCostSummary {
+  string vehicle_id = 1;
+  double total_cost = 2;
+  double total_kwh = 3;
+  double avg_yuan_per_kwh = 4;
+  double avg_yuan_per_km = 5;
+}
+
+message GetVehicleCostSummaryRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+
+message PeriodReport {
+  int32 year = 1;
+  int32 month = 2;  // 0 = annual; 1-12 = monthly
+  double total_cost = 3;
+  double total_kwh = 4;
+  double total_km = 5;
+  string vehicle_id = 6;  // empty = all vehicles
+}
+
+message GetMonthlyReportRequest {
+  int32 year = 1;
+  int32 month = 2;
+  string vehicle_id = 3;  // optional
+}
+message GetAnnualReportRequest {
+  int32 year = 1;
+  string vehicle_id = 2;  // optional
+}
+
+message ChargerTypeBreakdown {
+  ChargerType charger_type = 1;
+  double total_cost = 2;
+  double total_kwh = 3;
+  double avg_yuan_per_kwh = 4;
+}
+
+message GetCostByChargerTypeRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+message GetCostByChargerTypeResponse { repeated ChargerTypeBreakdown breakdowns = 1; }
+
+message SourceCategoryBreakdown {
+  string source_category_id = 1;
+  string source_category_name = 2;
+  double total_cost = 3;
+  double total_kwh = 4;
+  double avg_yuan_per_kwh = 5;
+}
+
+message GetCostBySourceCategoryRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+message GetCostBySourceCategoryResponse { repeated SourceCategoryBreakdown breakdowns = 1; }
+
+message ConsumptionEfficiency {
+  string vehicle_id = 1;
+  double km_per_kwh = 2;
+  double kwh_per_100km = 3;
+  double total_km = 4;
+  double total_kwh = 5;
+}
+
+message GetConsumptionEfficiencyRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+message GetConsumptionEfficiencyResponse { repeated ConsumptionEfficiency efficiencies = 1; }
+
+message RangeAccuracy {
+  string vehicle_id = 1;
+  double dashboard_range_total_km = 2;
+  double actual_mileage_total_km = 3;
+  double accuracy_ratio = 4;  // actual / dashboard
+}
+
+message GetRangeAccuracyRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+message GetRangeAccuracyResponse { repeated RangeAccuracy accuracies = 1; }
+
+message TemperatureBucket {
+  string label = 1;  // e.g. "<0", "0-10", "10-20", "20-30", ">30"
+  double avg_kwh_per_100km = 2;
+  int32 sample_count = 3;
+}
+
+message GetTemperatureConsumptionCorrelationRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+message GetTemperatureConsumptionCorrelationResponse { repeated TemperatureBucket buckets = 1; }
+
+service DisplayService {
+  rpc GetVehicleCostSummary(GetVehicleCostSummaryRequest) returns (VehicleCostSummary);
+  rpc GetMonthlyReport(GetMonthlyReportRequest) returns (PeriodReport);
+  rpc GetAnnualReport(GetAnnualReportRequest) returns (PeriodReport);
+  rpc GetCostByChargerType(GetCostByChargerTypeRequest) returns (GetCostByChargerTypeResponse);
+  rpc GetCostBySourceCategory(GetCostBySourceCategoryRequest) returns (GetCostBySourceCategoryResponse);
+  rpc GetConsumptionEfficiency(GetConsumptionEfficiencyRequest) returns (GetConsumptionEfficiencyResponse);
+  rpc GetRangeAccuracy(GetRangeAccuracyRequest) returns (GetRangeAccuracyResponse);
+  rpc GetTemperatureConsumptionCorrelation(GetTemperatureConsumptionCorrelationRequest) returns (GetTemperatureConsumptionCorrelationResponse);
+}

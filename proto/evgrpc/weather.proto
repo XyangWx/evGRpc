@@ -1,2 +1,19 @@
 syntax = "proto3";
 package evgrpc;
+
+message Weather {
+  string id = 1;
+  string name = 2;
+}
+
+message CreateWeatherRequest { string name = 1; }
+message SearchWeatherRequest {
+  string prefix = 1;
+  int32 limit = 2;
+}
+message SearchWeatherResponse { repeated Weather matches = 1; }
+
+service WeatherService {
+  rpc CreateWeather(CreateWeatherRequest) returns (Weather);
+  rpc SearchWeather(SearchWeatherRequest) returns (SearchWeatherResponse);
+}

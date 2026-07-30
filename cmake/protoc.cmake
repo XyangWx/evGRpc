@@ -7,19 +7,19 @@ find_package(Protobuf REQUIRED)
 # FetchContent_MakeAvailable has added grpc via add_subdirectory, so we use it
 # directly via $<TARGET_FILE:grpc_cpp_plugin>.
 
-set(EVGRPC_PROTO_DIR ${CMAKE_SOURCE_DIR}/proto/evgrpc)
+set(EVGRPC_PROTO_DIR ${CMAKE_SOURCE_DIR}/proto)
 set(EVGRPC_PROTO_GEN_DIR ${CMAKE_BINARY_DIR}/generated)
 
 file(MAKE_DIRECTORY ${EVGRPC_PROTO_GEN_DIR})
 
 set(EVGRPC_PROTO_FILES
-  ${EVGRPC_PROTO_DIR}/common.proto
-  ${EVGRPC_PROTO_DIR}/vehicle.proto
-  ${EVGRPC_PROTO_DIR}/weather.proto
-  ${EVGRPC_PROTO_DIR}/source_category.proto
-  ${EVGRPC_PROTO_DIR}/consumption.proto
-  ${EVGRPC_PROTO_DIR}/charging.proto
-  ${EVGRPC_PROTO_DIR}/display.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/common.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/vehicle.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/weather.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/source_category.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/consumption.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/charging.proto
+  ${EVGRPC_PROTO_DIR}/evgrpc/display.proto
 )
 
 add_custom_target(evgrpc_proto_gen

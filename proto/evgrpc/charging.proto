@@ -1,2 +1,90 @@
 syntax = "proto3";
 package evgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
+
+enum ChargerType {
+  CHARGER_TYPE_UNSPECIFIED = 0;
+  CHARGER_TYPE_FAST = 1;
+  CHARGER_TYPE_SLOW = 2;
+}
+
+message Charging {
+  string id = 1;
+  string vehicle_id = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int32 start_percent = 5;
+  int32 end_percent = 6;
+  int32 start_mileage_km = 7;
+  int32 end_mileage_km = 8;
+  double kwh_charged = 9;
+  double cost = 10;
+  double electricity_unit_price = 11;
+  google.protobuf.DoubleValue service_fee = 12;  // nullable
+  ChargerType charger_type = 13;
+  string source_category_id = 14;
+  string location = 15;
+  string remark = 16;
+}
+
+message CreateChargingRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+  int32 start_percent = 4;
+  int32 end_percent = 5;
+  int32 start_mileage_km = 6;
+  int32 end_mileage_km = 7;
+  double kwh_charged = 8;
+  double cost = 9;
+  double electricity_unit_price = 10;
+  google.protobuf.DoubleValue service_fee = 11;
+  ChargerType charger_type = 12;
+  string source_category_id = 13;
+  string location = 14;
+  string remark = 15;
+}
+message GetChargingRequest { string id = 1; }
+message UpdateChargingRequest {
+  string id = 1;
+  string vehicle_id = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int32 start_percent = 5;
+  int32 end_percent = 6;
+  int32 start_mileage_km = 7;
+  int32 end_mileage_km = 8;
+  double kwh_charged = 9;
+  double cost = 10;
+  double electricity_unit_price = 11;
+  google.protobuf.DoubleValue service_fee = 12;
+  ChargerType charger_type = 13;
+  string source_category_id = 14;
+  string location = 15;
+  string remark = 16;
+}
+message DeleteChargingRequest { string id = 1; }
+message ListChargingsRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_after = 2;
+  google.protobuf.Timestamp start_before = 3;
+  ChargerType charger_type = 4;
+  string source_category_id = 5;
+  int32 page_size = 6;
+  string page_token = 7;
+}
+message ListChargingsResponse {
+  repeated Charging chargings = 1;
+  string next_page_token = 2;
+}
+
+service ChargingService {
+  rpc CreateCharging(CreateChargingRequest) returns (Charging);
+  rpc GetCharging(GetChargingRequest) returns (Charging);
+  rpc UpdateCharging(UpdateChargingRequest) returns (Charging);
+  rpc DeleteCharging(DeleteChargingRequest) returns (google.protobuf.Empty);
+  rpc ListChargings(ListChargingsRequest) returns (ListChargingsResponse);
+}

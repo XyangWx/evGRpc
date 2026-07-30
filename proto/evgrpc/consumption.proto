@@ -1,2 +1,75 @@
 syntax = "proto3";
 package evgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+message Consumption {
+  string id = 1;
+  string vehicle_id = 2;
+  google.protobuf.Timestamp start = 3;
+  google.protobuf.Timestamp end = 4;
+  int32 begin_percent = 5;
+  int32 end_percent = 6;
+  int32 begin_mileage_km = 7;
+  int32 end_mileage_km = 8;
+  int32 begin_range_km = 9;
+  int32 end_range_km = 10;
+  double highest_temperature_c = 11;
+  double lowest_temperature_c = 12;
+  string weather_id = 13;
+  string remark = 14;
+}
+
+message CreateConsumptionRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start = 2;
+  google.protobuf.Timestamp end = 3;
+  int32 begin_percent = 4;
+  int32 end_percent = 5;
+  int32 begin_mileage_km = 6;
+  int32 end_mileage_km = 7;
+  int32 begin_range_km = 8;
+  int32 end_range_km = 9;
+  double highest_temperature_c = 10;
+  double lowest_temperature_c = 11;
+  string weather_id = 12;
+  string remark = 13;
+}
+message GetConsumptionRequest { string id = 1; }
+message UpdateConsumptionRequest {
+  string id = 1;
+  string vehicle_id = 2;
+  google.protobuf.Timestamp start = 3;
+  google.protobuf.Timestamp end = 4;
+  int32 begin_percent = 5;
+  int32 end_percent = 6;
+  int32 begin_mileage_km = 7;
+  int32 end_mileage_km = 8;
+  int32 begin_range_km = 9;
+  int32 end_range_km = 10;
+  double highest_temperature_c = 11;
+  double lowest_temperature_c = 12;
+  string weather_id = 13;
+  string remark = 14;
+}
+message DeleteConsumptionRequest { string id = 1; }
+message ListConsumptionsRequest {
+  string vehicle_id = 1;
+  google.protobuf.Timestamp start_after = 2;
+  google.protobuf.Timestamp start_before = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+message ListConsumptionsResponse {
+  repeated Consumption consumptions = 1;
+  string next_page_token = 2;
+}
+
+service ConsumptionService {
+  rpc CreateConsumption(CreateConsumptionRequest) returns (Consumption);
+  rpc GetConsumption(GetConsumptionRequest) returns (Consumption);
+  rpc UpdateConsumption(UpdateConsumptionRequest) returns (Consumption);
+  rpc DeleteConsumption(DeleteConsumptionRequest) returns (google.protobuf.Empty);
+  rpc ListConsumptions(ListConsumptionsRequest) returns (ListConsumptionsResponse);
+}

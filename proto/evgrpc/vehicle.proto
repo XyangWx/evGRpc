@@ -1,2 +1,54 @@
 syntax = "proto3";
 package evgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "evgrpc/common.proto";
+
+message Vehicle {
+  string id = 1;
+  string brand = 2;
+  int32 calibrated_range_km = 3;
+  double battery_capacity_kwh = 4;
+  google.protobuf.Timestamp purchase_date = 5;
+  string license_plate = 6;
+}
+
+message CreateVehicleRequest {
+  string brand = 1;
+  int32 calibrated_range_km = 2;
+  double battery_capacity_kwh = 3;
+  google.protobuf.Timestamp purchase_date = 4;
+  string license_plate = 5;
+}
+
+message GetVehicleRequest { string id = 1; }
+
+message UpdateVehicleRequest {
+  string id = 1;
+  string brand = 2;
+  int32 calibrated_range_km = 3;
+  double battery_capacity_kwh = 4;
+  google.protobuf.Timestamp purchase_date = 5;
+  string license_plate = 6;
+}
+
+message DeleteVehicleRequest { string id = 1; }
+
+message ListVehiclesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListVehiclesResponse {
+  repeated Vehicle vehicles = 1;
+  string next_page_token = 2;
+}
+
+service VehicleService {
+  rpc CreateVehicle(CreateVehicleRequest) returns (Vehicle);
+  rpc GetVehicle(GetVehicleRequest) returns (Vehicle);
+  rpc UpdateVehicle(UpdateVehicleRequest) returns (Vehicle);
+  rpc DeleteVehicle(DeleteVehicleRequest) returns (google.protobuf.Empty);
+  rpc ListVehicles(ListVehiclesRequest) returns (ListVehiclesResponse);
+}
