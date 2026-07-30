@@ -1432,7 +1432,12 @@ std::optional<Claims> JwtValidator::Validate(const std::string& token) const {
         Claims c;
         c.subject = decoded.has_subject() ? decoded.get_subject() : "";
         c.issuer  = decoded.has_issuer()  ? decoded.get_issuer()  : "";
-        c.audience = decoded.has_audience() ? decoded.get_audience() : "";
+        // jwt-cpp's get_audience() returns std::set<std::string> (RFC 7519
+        // allows `aud` to be a string OR an array). The verifier above has
+        // already confirmed our expected audience is present, so any element
+        // is safe to record.
+        auto aud_set = decoded.get_audience();
+        c.audience = aud_set.empty() ? "" : *aud_set.begin();
         return c;
     } catch (const std::exception&) {
         return std::nullopt;  // fail-closed: any exception = invalid
