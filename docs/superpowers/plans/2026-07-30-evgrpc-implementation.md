@@ -788,7 +788,7 @@ grpc::Status ToGrpcStatus(const std::exception& e) {
 
 - [ ] **Step 3: Wire CMake**
 
-Append `error.cc` to `evgrpc_db` library sources. Link `gRPC::grpc++` to `evgrpc_db`.
+Append `error.cc` to `evgrpc_db` library sources. Link `grpc++` to `evgrpc_db`.
 
 - [ ] **Step 4: Run + commit**
 
@@ -1931,7 +1931,7 @@ TEST_F(VehicleE2ETest, DuplicateLicensePlateFails) {
 ```cmake
 # src/services/CMakeLists.txt
 add_library(evgrpc_services vehicle_service.cc)
-target_link_libraries(evgrpc_services PUBLIC evgrpc_db gRPC::grpc++ evgrpc_proto_gen)
+target_link_libraries(evgrpc_services PUBLIC evgrpc_db grpc++ evgrpc_proto_gen)
 target_include_directories(evgrpc_services PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/generated)
 ```
 
