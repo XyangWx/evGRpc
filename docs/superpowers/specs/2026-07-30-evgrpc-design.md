@@ -10,7 +10,7 @@
 
 ### Goal
 
-Build a gRPC service in C++ that **records and analyzes electricity costs for electric vehicles**. All data entry is manual. Analysis surfaces per-vehicle cost, charging efficiency, and weather/temperature correlation.
+Build a gRPC service in C++ that **records and analyzes electricity costs for electric vehicles**. All data entry is manual. Analysis surfaces per-vehicle cost, charging efficiency, and weather/temperature correlation. Service is protected by OAuth 2.0 — non-authenticated callers cannot invoke any RPC.
 
 ### In Scope (v1)
 
@@ -20,15 +20,17 @@ Build a gRPC service in C++ that **records and analyzes electricity costs for el
 - Manual data entry via gRPC RPCs
 - 5 functional modules: vehicle, consumption, weather, charging, display
 - Multi-stage Docker build (CMake + Ninja)
+- **OAuth 2.0 Resource Server authentication** — JWT bearer tokens validated against an external IdP via JWKS
 
 ### Out of Scope (v1)
 
 - nginx reverse proxy — **deferred to v2**
-- Authentication / multi-tenancy (single-user internal service)
+- OAuth 2.0 server / token issuance — handled by external IdP
+- Scope-based authorization (any valid token can call any RPC in v1)
+- Multi-user isolation (no `user_id` columns in business tables; single-user assumed)
 - External weather API (manual entry with autocomplete)
 - Currency conversion (RMB only)
 - Web UI (gRPC clients are CLI / custom)
-- Multi-user, multi-tenant
 - Mobile / web clients
 
 ---
@@ -38,27 +40,50 @@ Build a gRPC service in C++ that **records and analyzes electricity costs for el
 ```
 ┌──────────────────┐
 │  gRPC Client(s)  │
+│  (Bearer JWT)    │
 └────────┬─────────┘
-         │ HTTP/2 (gRPC)
+         │ HTTP/2 + Authorization: Bearer <JWT>
          ▼
-┌──────────────────────────────┐
-│  Docker Container            │
-│  ┌────────────────────────┐  │
-│  │  C++ gRPC server       │  │
-│  │  (grpc++ + libpqxx)    │  │
-│  └────────┬───────────────┘  │
-└───────────┼──────────────────┘
+┌──────────────────────────────────────────┐
+│  Docker Container                        │
+│  ┌────────────────────────────────────┐  │
+│  │  C++ gRPC server                   │  │
+│  │  ┌──────────────────────────────┐  │  │
+│  │  │  Auth Interceptor            │◄─┼──── JWKS cache (refreshed)
+│  │  │  (validates JWT signature,   │  │     │
+│  │  │   iss, aud, exp)             │  │     │
+│  │  └──────────────┬───────────────┘  │     │
+│  │  ┌──────────────▼───────────────┐  │     │
+│  │  │  6 RPC services              │  │     │
+│  │  │  (Vehicle / Weather /        │  │     │
+│  │  │   SourceCategory /           │  │     │
+│  │  │   Consumption / Charging /   │  │     │
+│  │  │   Display)                   │  │     │
+│  │  └──────────────┬───────────────┘  │     │
+│  │  ┌──────────────▼───────────────┐  │     │
+│  │  │  libpqxx (PG client)         │  │     │
+│  │  └──────────────────────────────┘  │     │
+│  └────────────────────────────────────┘  │
+└───────────┬──────────────────────────────┘
             │ PostgreSQL protocol
             ▼
    ┌─────────────────┐
    │  PostgreSQL     │  (external, already deployed)
    └─────────────────┘
+
+JWKS fetch (on startup + cache miss):
+   ┌─────────────────────┐
+   │  OAuth 2.0 IdP      │  (external — Keycloak / Auth0 / any OIDC provider)
+   │  /.well-known/      │
+   │  jwks.json          │
+   └─────────────────────┘
 ```
 
 - **Single binary** runs all 6 gRPC services on one port (default `:50051`).
+- **Auth Interceptor** runs before every RPC; rejects requests with missing or invalid token.
 - **PostgreSQL** is external — connection via `DATABASE_URL` env var.
-- **No internal state** — every request reads from / writes to PostgreSQL.
-- **No caching layer** — analyses query PostgreSQL directly with aggregation.
+- **OAuth IdP** is external — JWKS endpoint via `OAUTH_JWKS_URL` env var.
+- **No internal state** between requests — every request reads from / writes to PostgreSQL (except the JWKS cache).
 
 ---
 
@@ -104,14 +129,14 @@ CREATE TABLE consumption (
   VehicleId           UUID NOT NULL REFERENCES vehicle(Id),
   Start               TIMESTAMP NOT NULL,
   End                 TIMESTAMP NOT NULL,
-  BeginPercent        INT NOT NULL,           -- 开始电量百分比
-  EndPercent          INT NOT NULL,           -- 结束电量百分比
-  BeginMileage        INT NOT NULL,           -- 起始里程 (km)
-  EndMileage          INT NOT NULL,           -- 结束里程 (km)
-  BeginRange          INT NOT NULL,           -- 开始续航里程 (km)
-  EndRange            INT NOT NULL,           -- 结束续航里程 (km)
-  HighestTemperature  DECIMAL(4,1) NOT NULL,  -- 最高气温 (℃)
-  LowestTemperature   DECIMAL(4,1) NOT NULL,  -- 最低气温 (℃)
+  BeginPercent        INT NOT NULL,
+  EndPercent          INT NOT NULL,
+  BeginMileage        INT NOT NULL,
+  EndMileage          INT NOT NULL,
+  BeginRange          INT NOT NULL,
+  EndRange            INT NOT NULL,
+  HighestTemperature  DECIMAL(4,1) NOT NULL,
+  LowestTemperature   DECIMAL(4,1) NOT NULL,
   WeatherId           UUID NOT NULL REFERENCES weather(Id),
   Remark              TEXT
 );
@@ -130,7 +155,7 @@ CREATE TABLE source_category (
 
 ### 3.5 `charger_type_enum`
 
-PostgreSQL ENUM type. Hard-coded values; extend via `ALTER TYPE` if needed.
+PostgreSQL ENUM type.
 
 ```sql
 CREATE TYPE charger_type_enum AS ENUM ('fast', 'slow');
@@ -152,8 +177,8 @@ CREATE TABLE charging (
   EndMileage            INT NOT NULL,
   KwhCharged            DECIMAL(10,2) NOT NULL,
   Cost                  DECIMAL(10,2) NOT NULL,
-  ElectricityUnitPrice  DECIMAL(4,2)  NOT NULL,  -- 元/kWh
-  ServiceFee            DECIMAL(5,2),            -- 元 (nullable)
+  ElectricityUnitPrice  DECIMAL(4,2)  NOT NULL,
+  ServiceFee            DECIMAL(5,2),
   ChargerType           charger_type_enum NOT NULL,
   SourceCategoryId      UUID NOT NULL REFERENCES source_category(Id),
   Location              VARCHAR(100),
@@ -170,26 +195,17 @@ CREATE INDEX idx_consumption_vehicle_start ON consumption(VehicleId, Start);
 CREATE INDEX idx_charging_vehicle_starttime ON charging(VehicleId, StartTime);
 ```
 
-(Exact index list decided in implementation plan.)
-
 ### 3.8 Constraints (NOT enforced in v1)
 
-Application-level validation only — to keep insertion forgiving during data entry:
-
-- `End > Start` (charging & consumption)
-- `EndPercent > BeginPercent`
-- `EndMileage >= BeginMileage`
-- `EndRange >= BeginRange`
-- `HighestTemperature >= LowestTemperature`
-- `Cost >= 0`, `KwhCharged > 0`, `ElectricityUnitPrice > 0`, `ServiceFee >= 0` (if non-null)
-
-These may be promoted to DB CHECK constraints later if data quality warrants it.
+Application-level validation only — see §7 for details.
 
 ---
 
 ## 4. gRPC API
 
 Proto package: `evgrpc`.
+
+**Authentication:** All RPCs require a valid `Authorization: Bearer <JWT>` header. Requests without a valid token return `UNAUTHENTICATED` (gRPC code 16) before reaching the service handler. See §5 for token validation details.
 
 ### 4.1 Service: `VehicleService`
 
@@ -201,7 +217,7 @@ Proto package: `evgrpc`.
 | `DeleteVehicle` | `DeleteVehicleRequest { uuid id }` | `google.protobuf.Empty` |
 | `ListVehicles` | `ListVehiclesRequest { int32 page_size, string page_token }` | `ListVehiclesResponse` |
 
-`CreateVehicle` returns `ALREADY_EXISTS` if `LicensePlate` collides with existing vehicle.
+`CreateVehicle` returns `ALREADY_EXISTS` if `LicensePlate` collides.
 
 ### 4.2 Service: `WeatherService`
 
@@ -210,8 +226,8 @@ Proto package: `evgrpc`.
 | `CreateWeather` | `CreateWeatherRequest { string name }` | `Weather` |
 | `SearchWeather` | `SearchWeatherRequest { string prefix, int32 limit }` | `SearchWeatherResponse { repeated Weather matches }` |
 
-`SearchWeather` implements prefix match: `Name LIKE '<prefix>%' ORDER BY Name LIMIT N`.
-`CreateWeather` returns `ALREADY_EXISTS` if `Name` collides with existing entry (UNIQUE constraint).
+`SearchWeather`: `Name LIKE '<prefix>%' ORDER BY Name LIMIT N`.
+`CreateWeather` returns `ALREADY_EXISTS` on UNIQUE collision.
 
 ### 4.3 Service: `SourceCategoryService`
 
@@ -242,7 +258,7 @@ Same shape as `WeatherService`:
 | `DeleteCharging` | `DeleteChargingRequest { uuid id }` | `google.protobuf.Empty` |
 | `ListChargings` | `ListChargingsRequest { uuid vehicle_id, optional Timestamp start_after, optional Timestamp start_before, optional ChargerType charger_type, optional uuid source_category_id, int32 page_size, string page_token }` | `ListChargingsResponse` |
 
-`ChargerType` is a proto enum with three values (per standard protobuf convention, includes `UNSPECIFIED`):
+`ChargerType` proto enum:
 
 ```
 enum ChargerType {
@@ -252,15 +268,15 @@ enum ChargerType {
 }
 ```
 
-Stored as PostgreSQL `charger_type_enum` (`'fast'`, `'slow'`). Conversion happens at the storage layer.
+Stored as PostgreSQL `charger_type_enum` (`'fast'`, `'slow'`). Conversion at the storage layer.
 
 ### 4.6 Service: `DisplayService`
 
-All analysis RPCs. Filter parameters:
+Filter parameters:
 
-- `vehicle_id` — optional for most RPCs (omitted = aggregate across all vehicles); **required** for `GetVehicleCostSummary` (per-vehicle).
+- `vehicle_id` — optional for most RPCs (omitted = aggregate across all vehicles); **required** for `GetVehicleCostSummary`.
 - `start_time` / `end_time` — optional date range (inclusive). Omitted = no time filter.
-- `year` / `month` — required for `GetAnnualReport` / `GetMonthlyReport` (calendar year / month, integer).
+- `year` / `month` — required for `GetAnnualReport` / `GetMonthlyReport` (calendar year / month).
 
 | RPC | Required params | Returns |
 |---|---|---|
@@ -271,13 +287,61 @@ All analysis RPCs. Filter parameters:
 | `GetCostBySourceCategory` | optional `vehicle_id`, optional time range | Per-source-category breakdown |
 | `GetConsumptionEfficiency` | optional `vehicle_id`, optional time range | km/kWh, kWh/100km |
 | `GetRangeAccuracy` | optional `vehicle_id`, optional time range | Dashboard range estimate vs actual mileage difference (%) |
-| `GetTemperatureConsumptionCorrelation` | optional `vehicle_id`, optional time range | kWh/100km bucketed by temperature range (e.g., <0℃, 0-10℃, 10-20℃, 20-30℃, >30℃) |
-
-Detailed response message shapes are specified in `proto/evgrpc/display.proto` (during plan / implementation).
+| `GetTemperatureConsumptionCorrelation` | optional `vehicle_id`, optional time range | kWh/100km bucketed by temperature range (<0℃, 0-10℃, 10-20℃, 20-30℃, >30℃) |
 
 ---
 
-## 5. Service Boundary
+## 5. Authentication & Authorization
+
+### 5.1 Role
+
+evGRpc acts as an **OAuth 2.0 Resource Server**. It does **not** issue tokens — it only validates bearer tokens presented by clients. Token issuance, user registration, and login flows are handled by an external OAuth 2.0 / OIDC provider (e.g., Keycloak, Auth0, GitHub OAuth).
+
+### 5.2 Token Format
+
+- **JWT** (RFC 7519), signed with **RS256** (asymmetric; verification via JWKS public keys).
+- Transmitted in `Authorization: Bearer <JWT>` header.
+
+### 5.3 Validation Flow
+
+Performed by a gRPC ServerInterceptor before each RPC:
+
+1. Extract `Authorization` header from incoming metadata
+2. If absent → `UNAUTHENTICATED`
+3. Parse JWT header → fetch `kid` (key id)
+4. Look up public key from **JWKS cache** (fetched from `OAUTH_JWKS_URL`, refreshed on TTL expiry or unknown-`kid` — see plan for cache strategy)
+5. Verify RS256 signature with the public key
+6. Validate standard claims:
+   - `iss` equals `OAUTH_ISSUER_URL`
+   - `aud` contains `OAUTH_AUDIENCE`
+   - `exp` > now (and `nbf` < now if present)
+7. On success: extract `sub` (subject) into interceptor context for audit logging; pass through to RPC handler
+8. On failure: `UNAUTHENTICATED` (with no detail leak)
+
+The interceptor must **fail-closed** — any error in token parsing, key lookup, signature verification, or claim validation returns `UNAUTHENTICATED`. No partial validation.
+
+### 5.4 Configuration
+
+| Env var | Purpose | Required |
+|---|---|---|
+| `OAUTH_ISSUER_URL` | Expected JWT `iss` claim | yes |
+| `OAUTH_AUDIENCE` | Expected JWT `aud` claim | yes |
+| `OAUTH_JWKS_URL` | JWKS endpoint URL (e.g., `https://idp.example.com/.well-known/jwks.json`) | yes |
+| `OAUTH_JWKS_CACHE_TTL` | JWKS cache TTL in seconds | no (default `3600`) |
+
+If any required env var is missing at startup, the server refuses to start (fail-fast).
+
+### 5.5 Authorization
+
+In v1, **any valid token can call any RPC**. No scope-based authorization, no role-based access control. The single auth check is "is this token valid?"
+
+Per-RPC scope differentiation (e.g., `evgrpc:read` vs `evgrpc:write`) is deferred to v2.
+
+The `sub` claim is **not** persisted in business tables in v1 — single-user assumed.
+
+---
+
+## 6. Service Boundary
 
 6 independent gRPC services, each generated from its own `.proto` file:
 
@@ -303,81 +367,95 @@ src/services/
   display_service.{h,cc}
 ```
 
-All services register against a single `ServerBuilder` and listen on one port.
+All services register against a single `ServerBuilder` and listen on one port. The auth interceptor (§5) wraps every RPC regardless of which service handles it.
 
 ---
 
-## 6. Error Handling
-
-Standard gRPC status codes:
+## 7. Error Handling
 
 | Code | When |
 |---|---|
-| `NOT_FOUND` | Record ID does not exist (Get/Update/Delete on missing row) |
-| `ALREADY_EXISTS` | UNIQUE constraint violation (LicensePlate, weather.Name, source_category.Name) |
-| `INVALID_ARGUMENT` | Bad input (e.g., `EndPercent < BeginPercent`, invalid time range) |
-| `INTERNAL` | Database errors, unexpected exceptions |
+| `UNAUTHENTICATED` (16) | Missing or invalid bearer token (§5) |
+| `NOT_FOUND` (5) | Record ID does not exist |
+| `ALREADY_EXISTS` (6) | UNIQUE constraint violation |
+| `INVALID_ARGUMENT` (3) | Bad input (e.g., `EndPercent < BeginPercent`, invalid time range) |
+| `INTERNAL` (13) | Database errors, unexpected exceptions |
 
 Application-level validation runs **before** hitting PostgreSQL — so most business-rule violations surface as `INVALID_ARGUMENT` and don't leak to `INTERNAL`.
 
 ---
 
-## 7. Testing Strategy
+## 8. Testing Strategy
 
 - **Unit tests** for business logic (validation rules, computation helpers).
 - **Integration tests** using [`testcontainers-cpp`](https://github.com/testcontainers/testcontainers-cpp) to spin up ephemeral PostgreSQL per test run.
 - **End-to-end tests** via a generated gRPC C++ client against a running test server (in-process server fixture).
+- **Auth tests** (new): test interceptor with valid JWT, expired JWT, wrong issuer, wrong audience, invalid signature, missing token, malformed header.
 - **No load testing** in v1.
 
 ---
 
-## 8. Deployment
+## 9. Deployment
 
 ### Build
 
 - CMake (`cmake -G Ninja ..`)
 - Ninja (`ninja`)
-- Dependencies fetched via CMake `FetchContent` or system package manager (decision in plan):
+- Dependencies (decision in plan):
   - `grpc++`
   - `protobuf`
   - `libpqxx`
   - `nlohmann/json`
+  - JWT library (e.g., `jwt-cpp`)
+  - HTTP client for JWKS (e.g., `libcurl` or `cpr`)
   - `gtest` (testing)
 
 ### Docker
 
 Multi-stage `Dockerfile`:
 
-- **Stage 1 (`builder`)**: base image with `gcc` + `cmake` + `ninja` + `libpqxx-dev` + `libgrpc++-dev` + `libprotobuf-dev`. Runs CMake configure + Ninja build.
+- **Stage 1 (`builder`)**: base image with `gcc` + `cmake` + `ninja` + `libpqxx-dev` + `libgrpc++-dev` + `libprotobuf-dev` + `libcurl-dev`. Runs CMake configure + Ninja build.
 - **Stage 2 (`runtime`)**: minimal base with `libpq5` + `libgrpc++1` + runtime libs. Copies built binary. Sets `ENTRYPOINT`.
 
 ### Runtime Config
 
 Environment variables consumed at startup:
 
-- `DATABASE_URL` — PostgreSQL connection string (required)
-- `GRPC_PORT` — listen port (default `50051`)
+| Var | Purpose | Required |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL connection string | yes |
+| `GRPC_PORT` | gRPC listen port | no (default `50051`) |
+| `OAUTH_ISSUER_URL` | Expected JWT `iss` claim | yes |
+| `OAUTH_AUDIENCE` | Expected JWT `aud` claim | yes |
+| `OAUTH_JWKS_URL` | JWKS endpoint URL | yes |
+| `OAUTH_JWKS_CACHE_TTL` | JWKS cache TTL seconds | no (default `3600`) |
+
+Server refuses to start if any required env var is missing.
 
 ---
 
-## 9. Open Questions (for Implementation Plan)
-
-These are intentionally deferred to the plan document:
+## 10. Open Questions (for Implementation Plan)
 
 - Exact `FetchContent` vs `vcpkg` vs `apt` for dependencies
 - CMake target structure (single library, multiple libraries, monorepo)
 - Logging library choice (e.g., `spdlog`, `glog`, raw `std::cerr`)
 - Whether to add Prometheus metrics endpoint (likely out for v1)
 - Specific index set beyond `idx_consumption_vehicle_start` and `idx_charging_vehicle_starttime`
+- **JWKS HTTP client choice** (`libcurl` vs `cpr` vs other)
+- **JWKS cache eviction strategy** (TTL + key rotation handling)
+- **JWT library choice** (`jwt-cpp` vs writing a minimal RS256 verifier)
+- **Test JWT generation strategy** (mock IdP via testcontainers vs static test RSA keys)
 
 ---
 
-## 10. Out of Scope (Explicit)
+## 11. Out of Scope (Explicit)
 
 - **nginx reverse proxy** — v1 binary listens directly; nginx added in v2.
-- **Authentication** — internal single-user service, no auth layer.
+- **OAuth 2.0 server / token issuance** — handled by external IdP (Keycloak / Auth0 / any OIDC).
+- **Scope-based authorization** — any valid token can call any RPC in v1.
+- **Multi-user isolation** — no `user_id` columns; single-user assumed.
 - **Multi-currency** — RMB only. Add `Currency` column later if needed.
 - **External weather API** — manual entry only with autocomplete.
-- **Time-of-use pricing** — no peak/valley tariff tracking (could be added later via `TariffPeriod` column).
-- **Mobile / web UI** — gRPC only; no frontend in this project.
-- **Backup / archival** — handled by PostgreSQL ops, not in this service.
+- **Time-of-use pricing** — no peak/valley tariff tracking.
+- **Mobile / web UI** — gRPC only.
+- **Backup / archival** — handled by PostgreSQL ops.
