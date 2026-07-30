@@ -108,3 +108,6 @@ ehthumbs.db
 # Logs
 *.log
 logs/
+
+# superpowers skill ephemeral state (per-worktree)
+.superpowers/
