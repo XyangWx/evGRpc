@@ -224,7 +224,7 @@ include(FetchContent)
 find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-set(EVGRPC_PROTO_DIR ${CMAKE_SOURCE_DIR}/proto/evgrpc)
+set(EVGRPC_PROTO_DIR ${CMAKE_SOURCE_DIR}/proto)
 set(EVGRPC_PROTO_GEN_DIR ${CMAKE_BINARY_DIR}/generated)
 
 file(MAKE_DIRECTORY ${EVGRPC_PROTO_GEN_DIR})
@@ -836,6 +836,7 @@ syntax = "proto3";
 package evgrpc;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
 import "evgrpc/common.proto";
 
 message Vehicle {
@@ -942,6 +943,7 @@ syntax = "proto3";
 package evgrpc;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
 
 message Consumption {
   string id = 1;
@@ -1021,6 +1023,8 @@ syntax = "proto3";
 package evgrpc;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
 
 enum ChargerType {
   CHARGER_TYPE_UNSPECIFIED = 0;
