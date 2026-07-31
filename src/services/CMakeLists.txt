@@ -2,6 +2,7 @@ add_library(evgrpc_services
   vehicle_service.cc
   weather_service.cc
   source_category_service.cc
+  consumption_service.cc
 )
 target_link_libraries(evgrpc_services PUBLIC
   evgrpc_db           # PgPool + ToGrpcStatus
