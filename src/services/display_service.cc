@@ -499,4 +499,87 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
   }
 }
 
+grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
+    grpc::ServerContext* ctx,
+    const GetTemperatureConsumptionCorrelationRequest* req,
+    GetTemperatureConsumptionCorrelationResponse* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetTemperatureConsumptionCorrelation";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    auto start_ts = MaybeTimestamp(req->start_time());
+    auto end_ts = MaybeTimestamp(req->end_time());
+
+    // Per consumption event:
+    //   - avg_temp = (HighestTemperature + LowestTemperature) / 2
+    //   - mileage   = EndMileage - BeginMileage
+    //   - kWh       = SUM(KwhCharged) for the same vehicle where
+    //                 StartTime is in [consumption.Start - 24h, consumption.End]
+    //                 (we look BACK 24h before the consumption because
+    //                 charging typically precedes driving).
+    //   - kWh_per_100km = (kWh / mileage) * 100
+    //
+    // Then bucket by avg_temp (5 hard-coded buckets per the proto
+    // comment) and aggregate.
+    auto rows = tx.exec_params(
+        "WITH per_event AS ("
+        "  SELECT "
+        "    ((c.HighestTemperature + c.LowestTemperature) / 2.0)::DOUBLE PRECISION AS avg_temp, "
+        "    (c.EndMileage - c.BeginMileage)::DOUBLE PRECISION AS mileage, "
+        "    COALESCE(("
+        "      SELECT SUM(ch.KwhCharged) "
+        "      FROM charging ch "
+        "      WHERE ch.VehicleId = c.VehicleId "
+        "        AND ch.StartTime >= c.\"Start\" - INTERVAL '24 hours' "
+        "        AND ch.StartTime <= c.\"End\""
+        "    ), 0)::DOUBLE PRECISION AS kwh "
+        "  FROM consumption c "
+        "  WHERE ($1::TEXT IS NULL OR c.VehicleId = $1) "
+        "    AND ($2::TIMESTAMP IS NULL OR c.\"Start\" >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR c.\"Start\" <= $3) "
+        "    AND (c.EndMileage - c.BeginMileage) > 0"
+        ") "
+        "SELECT "
+        "  CASE "
+        "    WHEN avg_temp < 0  THEN '<0' "
+        "    WHEN avg_temp < 10 THEN '0-10' "
+        "    WHEN avg_temp < 20 THEN '10-20' "
+        "    WHEN avg_temp < 30 THEN '20-30' "
+        "    ELSE '>30' "
+        "  END AS label, "
+        "  COUNT(*) AS sample_count, "
+        "  SUM(mileage)::DOUBLE PRECISION AS total_km, "
+        "  SUM(kwh)::DOUBLE PRECISION AS total_kwh "
+        "FROM per_event "
+        "GROUP BY label "
+        "ORDER BY MIN(avg_temp)",
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts, end_ts);
+
+    for (const auto& row : rows) {
+      auto* b = resp->add_buckets();
+      b->set_label(row["label"].as<std::string>());
+      b->set_sample_count(row["sample_count"].as<int32_t>());
+      const double total_km = row["total_km"].as<double>();
+      const double total_kwh = row["total_kwh"].as<double>();
+      // kWh/100km = (kWh / km) * 100. If total_km is 0 (shouldn't
+      // happen since the WHERE clause filters mileage > 0), return 0.
+      b->set_avg_kwh_per_100km(total_km > 0 ? (total_kwh / total_km) * 100.0 : 0.0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    evgrpc::log::Get("db")->warn(
+        "method=GetTemperatureConsumptionCorrelation reason={}", e.what());
+    scope.set_status(s);
+    return s;
+  }
+}
+
 }  // namespace evgrpc

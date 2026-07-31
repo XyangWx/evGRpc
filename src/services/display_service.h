@@ -43,6 +43,10 @@ class DisplayServiceImpl final : public DisplayService::Service {
   grpc::Status GetRangeAccuracy(grpc::ServerContext*,
                                 const GetRangeAccuracyRequest*,
                                 GetRangeAccuracyResponse*) override;
+  grpc::Status GetTemperatureConsumptionCorrelation(
+      grpc::ServerContext*,
+      const GetTemperatureConsumptionCorrelationRequest*,
+      GetTemperatureConsumptionCorrelationResponse*) override;
 
  private:
   PgPool* pool_;
