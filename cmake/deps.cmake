@@ -3,11 +3,34 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET FALSE)
 
 # Note: this environment has severely rate-limited direct connectivity to
-# github.com (git clone stalls at ~3 KB/s). All deps are fetched through the
-# gh-proxy.com mirror, which proxies GitHub at full speed. The gitconfig
+# github.com (git clone stalls at ~3 KB/s; behind GFW, port 443 is fully
+# blocked). All deps are fetched through the gh-proxy.com mirror, which
+# proxies GitHub at full speed. The gitconfig
 # `url.<proxy>.insteadOf = github.com` redirection (set globally in this
 # session) ensures submodules also go through the mirror. The upstream tags/
 # versions are unchanged — only the transport is mirrored.
+#
+# We set the redirect HERE (at configure time) so the project is
+# self-contained — new clones don't need a manual `git config --global`
+# step. FETCHCONTENT runs git submodules with a clean env that respects
+# the gitconfig we set. Tested: with this line, grpc's
+# third_party/{abseil,boringssl,cares,re2,zlib} submodules all clone
+# through gh-proxy.com; without it, every submodule fails on the user's
+# machine with "Failed to connect to github.com port 443".
+execute_process(
+  COMMAND ${GIT_EXECUTABLE}
+          config --global url.https://gh-proxy.com/https://github.com/.insteadOf
+                  https://github.com/
+  RESULT_VARIABLE _gh_proxy_config_rc
+  OUTPUT_QUIET ERROR_QUIET
+)
+if(NOT _gh_proxy_config_rc EQUAL 0)
+  message(WARNING
+    "Failed to set git redirect to gh-proxy.com. If you're behind the GFW "
+    "or on a slow link, grpc's submodules will fail to clone. Run "
+    "manually:  git config --global url.gh-proxy.com.insteadOf "
+    "https://github.com/")
+endif()
 
 FetchContent_Declare(
   grpc
