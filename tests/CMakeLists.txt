@@ -9,6 +9,8 @@ add_executable(evgrpc_tests
   unit/test_jwks_cache.cc
   unit/test_authenticate.cc
   unit/test_log.cc
+  unit/uuid_test.cc
+  unit/rpc_scope_test.cc
 )
 target_link_libraries(evgrpc_tests PRIVATE
   gtest
@@ -17,6 +19,7 @@ target_link_libraries(evgrpc_tests PRIVATE
   evgrpc_config
   evgrpc_db
   evgrpc_log
+  evgrpc_util
   evgrpc_test_fixtures
   libpqxx::pqxx
 )
