@@ -126,14 +126,17 @@ set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
 #
 # We never install any of these — only build. Disabling install on
 # the consumer side is the canonical fix.
-set(protobuf_INSTALL      OFF CACHE BOOL "" FORCE)
-set(utf8_range_INSTALL   OFF CACHE BOOL "" FORCE)
-set(absl_INSTALL         OFF CACHE BOOL "" FORCE)
-set(c-ares_INSTALL       OFF CACHE BOOL "" FORCE)
-set(re2_INSTALL          OFF CACHE BOOL "" FORCE)
-set(zlib_INSTALL         OFF CACHE BOOL "" FORCE)
-set(boringssl_INSTALL    OFF CACHE BOOL "" FORCE)
-set(gRPC_INSTALL         OFF CACHE BOOL "" FORCE)
+set(protobuf_INSTALL            OFF CACHE BOOL "" FORCE)
+set(utf8_range_ENABLE_INSTALL  OFF CACHE BOOL "" FORCE)
+set(absl_ENABLE_INSTALL        OFF CACHE BOOL "" FORCE)
+set(c-ares_ENABLE_INSTALL      OFF CACHE BOOL "" FORCE)
+set(gRPC_INSTALL              OFF CACHE BOOL "" FORCE)
+# CMake 3.27+: globally skip install(EXPORT ...) rules at configure time.
+# We never run `cmake --install`; this is the belt-and-suspenders fallback
+# for any FetchContent lib whose install-option name we didn't guess
+# correctly above. Verified to silence the abseil-export storm that
+# started at Task 17 / 48c6d3384.
+set(CMAKE_SKIP_INSTALL_RULES   ON  CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(grpc protobuf libpqxx nlohmann_json spdlog googletest jwt_cpp)
 
 # gRPC's CMake config defaults to using its bundled third_party/protobuf for
