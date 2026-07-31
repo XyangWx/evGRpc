@@ -33,7 +33,29 @@ set(EVGRPC_PROTO_FILES
 #
 # FetchContent's `protoc` target is a regular executable (not IMPORTED),
 # so we use the $<TARGET_FILE:protoc> generator expression in the COMMAND.
-add_custom_target(evgrpc_proto_gen
+#
+# We use `add_custom_command(OUTPUT ...)` (NOT `add_custom_target` with no
+# OUTPUT) so CMake's configure-time source-file validation accepts the
+# generated *.pb.cc files when we hand them to add_library() in
+# src/proto/CMakeLists.txt. With just `add_custom_target` the files
+# aren't tracked as "generated" and CMake 3.27+ fails at configure
+# with "Cannot find source file" for every *.pb.cc.
+add_custom_command(
+  OUTPUT
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/common.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/common.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/vehicle.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/vehicle.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/weather.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/weather.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/source_category.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/source_category.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/consumption.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/consumption.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.grpc.pb.cc
   COMMAND $<TARGET_FILE:protoc>
     --proto_path=${EVGRPC_PROTO_DIR}
     --proto_path=${EVGRPC_WKT_PROTO_DIR}
@@ -44,4 +66,23 @@ add_custom_target(evgrpc_proto_gen
   DEPENDS ${EVGRPC_PROTO_FILES} protoc
   COMMENT "Generating protobuf + gRPC stubs (using FetchContent's protoc)"
   VERBATIM
+)
+# Alias the output as a target so other CMakeLists can `add_dependencies`
+# (or so the default `all` build picks it up).
+add_custom_target(evgrpc_proto_gen ALL
+  DEPENDS
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/common.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/common.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/vehicle.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/vehicle.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/weather.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/weather.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/source_category.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/source_category.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/consumption.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/consumption.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.grpc.pb.cc
 )
