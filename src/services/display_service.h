@@ -37,6 +37,12 @@ class DisplayServiceImpl final : public DisplayService::Service {
   grpc::Status GetCostBySourceCategory(
       grpc::ServerContext*, const GetCostBySourceCategoryRequest*,
       GetCostBySourceCategoryResponse*) override;
+  grpc::Status GetConsumptionEfficiency(
+      grpc::ServerContext*, const GetConsumptionEfficiencyRequest*,
+      GetConsumptionEfficiencyResponse*) override;
+  grpc::Status GetRangeAccuracy(grpc::ServerContext*,
+                                const GetRangeAccuracyRequest*,
+                                GetRangeAccuracyResponse*) override;
 
  private:
   PgPool* pool_;

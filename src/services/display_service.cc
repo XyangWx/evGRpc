@@ -3,6 +3,7 @@
 #include <google/protobuf/util/time_util.h>
 #include <pqxx/pqxx>
 #include <string>
+#include <unordered_map>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "services/charger/charger_type.h"
@@ -344,6 +345,155 @@ grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
     evgrpc::log::Get("db")->warn(
         "method=GetCostBySourceCategory vehicle_id={} reason={}",
         req->vehicle_id(), e.what());
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
+    grpc::ServerContext* ctx, const GetConsumptionEfficiencyRequest* req,
+    GetConsumptionEfficiencyResponse* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetConsumptionEfficiency";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  // The `consumption` table doesn't store kWh directly — kWh lives in
+  // the `charging` table. We derive consumption efficiency by aggregating
+  // the two tables independently under the same (vehicle_id, time
+  // window) predicate, then joining in C++ on vehicle_id. The two
+  // SUMs use the SAME time-window filter so the values are
+  // commensurable (a charging event and a consumption event in the
+  // same hour share that hour's energy and mileage).
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    auto start_ts = MaybeTimestamp(req->start_time());
+    auto end_ts = MaybeTimestamp(req->end_time());
+
+    // Per-vehicle totals from consumption.
+    auto km_rows = tx.exec_params(
+        "SELECT VehicleId, "
+        "       COALESCE(SUM(end_mileage - begin_mileage), 0)::DOUBLE PRECISION AS total_km "
+        "FROM consumption "
+        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "  AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
+        "  AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
+        "GROUP BY VehicleId",
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts, end_ts);
+
+    // Per-vehicle totals from charging.
+    auto kwh_rows = tx.exec_params(
+        "SELECT VehicleId, "
+        "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
+        "FROM charging "
+        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
+        "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "GROUP BY VehicleId",
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts, end_ts);
+
+    // Merge by VehicleId. C++-side join is fine for two small result
+    // sets (one row per vehicle per table). If the per-vehicle counts
+    // ever grow into the thousands, push this into SQL.
+    std::unordered_map<std::string, double> kwh_by_vehicle;
+    for (const auto& row : kwh_rows) {
+      kwh_by_vehicle.emplace(row["VehicleId"].as<std::string>(),
+                             row["total_kwh"].as<double>());
+    }
+    for (const auto& row : km_rows) {
+      const auto vid = row["VehicleId"].as<std::string>();
+      const double total_km = row["total_km"].as<double>();
+      const double total_kwh = kwh_by_vehicle.count(vid)
+                                  ? kwh_by_vehicle.at(vid) : 0.0;
+      auto* e = resp->add_efficiencies();
+      e->set_vehicle_id(vid);
+      e->set_total_km(total_km);
+      e->set_total_kwh(total_kwh);
+      e->set_km_per_kwh(total_kwh > 0 ? total_km / total_kwh : 0.0);
+      // kWh/100km is the inverse of km/kWh, scaled to 100km.
+      e->set_kwh_per_100km(total_km > 0 ? (total_kwh / total_km) * 100.0 : 0.0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    evgrpc::log::Get("db")->warn(
+        "method=GetConsumptionEfficiency reason={}", e.what());
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetRangeAccuracy(
+    grpc::ServerContext* ctx, const GetRangeAccuracyRequest* req,
+    GetRangeAccuracyResponse* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetRangeAccuracy";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    auto start_ts = MaybeTimestamp(req->start_time());
+    auto end_ts = MaybeTimestamp(req->end_time());
+
+    // Dashboard range: SUM(StartRange - EndRange) over charging
+    // (per spec: "dashboard_range_total_km" = sum of ranges the car
+    // THOUGHT it had at charge-start minus what it had at charge-end
+    // — i.e. range lost during the charging event).
+    // Actual mileage: SUM(EndMileage - BeginMileage) over consumption
+    // (km actually driven between consumption events).
+    // Accuracy ratio = actual / dashboard — values < 1 mean the car
+    // over-reported its range; values > 1 mean it under-reported.
+    auto rows = tx.exec_params(
+        "SELECT d.VehicleId, "
+        "       COALESCE(d.dashboard_range, 0)::DOUBLE PRECISION AS dashboard, "
+        "       COALESCE(m.actual_mileage, 0)::DOUBLE PRECISION AS actual "
+        "FROM ("
+        "  SELECT VehicleId, SUM(StartRange - EndRange) AS dashboard_range "
+        "  FROM charging "
+        "  WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "    AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "  GROUP BY VehicleId"
+        ") d FULL OUTER JOIN ("
+        "  SELECT VehicleId, SUM(EndMileage - BeginMileage) AS actual_mileage "
+        "  FROM consumption "
+        "  WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "    AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
+        "  GROUP BY VehicleId"
+        ") m ON d.VehicleId = m.VehicleId",
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts, end_ts);
+
+    for (const auto& row : rows) {
+      // FULL OUTER JOIN can yield null VehicleId; coalesce to empty.
+      const std::string vid = row["VehicleId"].is_null()
+                                  ? std::string{}
+                                  : row["VehicleId"].as<std::string>();
+      if (vid.empty()) continue;
+      const double dashboard = row["dashboard"].as<double>();
+      const double actual = row["actual"].as<double>();
+      auto* a_out = resp->add_accuracies();
+      a_out->set_vehicle_id(vid);
+      a_out->set_dashboard_range_total_km(dashboard);
+      a_out->set_actual_mileage_total_km(actual);
+      a_out->set_accuracy_ratio(dashboard > 0 ? actual / dashboard : 0.0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    evgrpc::log::Get("db")->warn(
+        "method=GetRangeAccuracy reason={}", e.what());
     scope.set_status(s);
     return s;
   }
