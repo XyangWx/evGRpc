@@ -117,15 +117,23 @@ set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
 set(gRPC_SSL_PROVIDER package CACHE STRING "" FORCE)
 set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
-# Disable protobuf's install(EXPORT ...) rules. We only BUILD protobuf
-# (use its lib + headers + protoc binary) — never install. Without this,
-# protobuf's CMakeLists runs install(EXPORT "protobuf-targets" ...) at
-# CONFIGURE time, which fails on every absl_* target with "not in any
-# export set" because grpc also pulls in a separate copy of abseil
-# (grpc-src/third_party/abseil-cpp) and the two abseil copies don't
-# share a target graph. Configure fails with "Build files cannot be
-# regenerated correctly" because the install rules abort generation.
-set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+# Disable install(EXPORT ...) rules for the FetchContent deps we never
+# install. Each library's CMakeLists runs `install(EXPORT ...)` at
+# CONFIGURE time, and fails with "absl_* not in any export set" if a
+# transitive dep (especially abseil) is also pulled in separately by
+# a sibling target — because FetchContent's two-level submodule pulls
+# (grpc → abseil, protobuf → abseil) don't share a target graph.
+#
+# We never install any of these — only build. Disabling install on
+# the consumer side is the canonical fix.
+set(protobuf_INSTALL      OFF CACHE BOOL "" FORCE)
+set(utf8_range_INSTALL   OFF CACHE BOOL "" FORCE)
+set(absl_INSTALL         OFF CACHE BOOL "" FORCE)
+set(c-ares_INSTALL       OFF CACHE BOOL "" FORCE)
+set(re2_INSTALL          OFF CACHE BOOL "" FORCE)
+set(zlib_INSTALL         OFF CACHE BOOL "" FORCE)
+set(boringssl_INSTALL    OFF CACHE BOOL "" FORCE)
+set(gRPC_INSTALL         OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(grpc protobuf libpqxx nlohmann_json spdlog googletest jwt_cpp)
 
 # gRPC's CMake config defaults to using its bundled third_party/protobuf for
