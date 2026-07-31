@@ -14,6 +14,7 @@
 #include "log/log.h"
 #include "services/charging_service.h"
 #include "services/consumption_service.h"
+#include "services/display_service.h"
 #include "services/source_category_service.h"
 #include "services/vehicle_service.h"
 #include "services/weather_service.h"
@@ -77,6 +78,7 @@ int main() {
     evgrpc::SourceCategoryServiceImpl sc_svc(&pool, validator.get());
     evgrpc::ConsumptionServiceImpl consumption_svc(&pool, validator.get());
     evgrpc::ChargingServiceImpl charging_svc(&pool, validator.get());
+    evgrpc::DisplayServiceImpl display_svc(&pool, validator.get());
 
     // 4. Build & start the gRPC server.
     grpc::ServerBuilder builder;
@@ -87,6 +89,7 @@ int main() {
     builder.RegisterService(&sc_svc);
     builder.RegisterService(&consumption_svc);
     builder.RegisterService(&charging_svc);
+    builder.RegisterService(&display_svc);
     auto server = builder.BuildAndStart();
     if (!server) {
       server_log->critical("failed to bind :{} (port in use?)",
