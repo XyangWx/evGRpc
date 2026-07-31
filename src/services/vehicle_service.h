@@ -2,6 +2,8 @@
 #include <grpcpp/grpcpp.h>
 #include "auth/jwt_validator.h"
 #include "db/pool.h"
+#include "evgrpc/vehicle.pb.h"
+#include "evgrpc/vehicle.grpc.pb.h"
 
 namespace evgrpc {
 

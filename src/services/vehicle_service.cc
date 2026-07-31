@@ -15,6 +15,9 @@ namespace {
 // Map a SQL row to the Vehicle proto. purchase_date is read as
 // `PurchaseDate::text` (ISO 8601 date string) so we can parse it
 // into google.protobuf.Timestamp without a tz-naive ambiguity.
+//
+// protobuf 4.x renamed BuildFromString -> FromString and the latter
+// returns `bool` (out-param Timestamp*) instead of absl::StatusOr.
 Vehicle RowToVehicle(const pqxx::row& r) {
   Vehicle v;
   v.set_id(r["Id"].as<std::string>());
@@ -23,10 +26,10 @@ Vehicle RowToVehicle(const pqxx::row& r) {
   v.set_battery_capacity_kwh(r["BatteryCapacity"].as<double>());
   const auto date_str = r["PurchaseDate"].as<std::string>();
   if (!date_str.empty()) {
-    auto ts = google::protobuf::util::TimeUtil::BuildFromString(
-        date_str + "T00:00:00Z");
-    if (ts.ok()) {
-      *v.mutable_purchase_date() = ts.value();
+    google::protobuf::Timestamp ts;
+    if (google::protobuf::util::TimeUtil::FromString(
+            date_str + "T00:00:00Z", &ts)) {
+      *v.mutable_purchase_date() = ts;
     }
   }
   v.set_license_plate(r["LicensePlate"].as<std::string>());
@@ -80,7 +83,9 @@ grpc::Status VehicleServiceImpl::CreateVehicle(
 
     // Read it back so the response reflects whatever the table did
     // (defaults, triggers, generated columns).
-    auto read = GetVehicle(ctx, &GetVehicleRequest{id}, resp);
+    GetVehicleRequest get_req;
+    get_req.set_id(id);
+    auto read = GetVehicle(ctx, &get_req, resp);
     if (!read.ok()) { scope.set_status(read); return read; }
     return grpc::Status::OK;
   } catch (const std::exception& e) {

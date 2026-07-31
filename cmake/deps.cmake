@@ -24,6 +24,12 @@ FetchContent_Declare(
   GIT_REPOSITORY https://gh-proxy.com/https://github.com/protocolbuffers/protobuf.git
   GIT_TAG        v25.1
   GIT_SHALLOW    TRUE
+  # Build the `protoc` binary alongside libprotobuf. Without this,
+  # protoc.cmake falls back to the host's `protoc` (3.21.12 on Ubuntu
+  # noble), which generates .pb.h files in the legacy 3.x format
+  # that 4.x protobuf headers refuse (`#error regenerate with newer
+  # protoc` at the version-check line). Building protoc from source
+  # adds ~30s to first-time configure but matches the 4.25 headers.
 )
 FetchContent_Declare(
   libpqxx
@@ -87,6 +93,7 @@ set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
 set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
 set(gRPC_SSL_PROVIDER package CACHE STRING "" FORCE)
 set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(grpc protobuf libpqxx nlohmann_json spdlog googletest jwt_cpp)
 
 # gRPC's CMake config defaults to using its bundled third_party/protobuf for
