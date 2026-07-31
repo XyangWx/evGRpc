@@ -315,7 +315,7 @@ Performed by a gRPC ServerInterceptor before each RPC:
    - `iss` equals `OAUTH_ISSUER_URL`
    - `aud` contains `OAUTH_AUDIENCE`
    - `exp` > now (and `nbf` < now if present)
-7. On success: extract `sub` (subject) into interceptor context for audit logging; pass through to RPC handler
+7. On success: extract `sub` (subject) for audit logging (see §5.6); pass through to RPC handler
 8. On failure: `UNAUTHENTICATED` (with no detail leak)
 
 The interceptor must **fail-closed** — any error in token parsing, key lookup, signature verification, or claim validation returns `UNAUTHENTICATED`. No partial validation.
@@ -338,6 +338,56 @@ In v1, **any valid token can call any RPC**. No scope-based authorization, no ro
 Per-RPC scope differentiation (e.g., `evgrpc:read` vs `evgrpc:write`) is deferred to v2.
 
 The `sub` claim is **not** persisted in business tables in v1 — single-user assumed.
+
+### 5.6 Logging
+
+Structured logging via **spdlog** v1.x. stderr + stdout + (optional) rotating file sink — see Sinks below.
+
+**Named loggers** (spdlog channels; all initialized to `LOG_LEVEL`):
+
+| Logger | Owner | What it logs |
+|---|---|---|
+| `auth` | `evgrpc::Authenticate` (Task 9) | every RPC's auth outcome (pass/fail + reason category) |
+| `service` | every gRPC service method (Tasks 10–14, 16–19) | per-RPC entry/exit with `req_id`, `subject`, `status_code`, `latency_ms` |
+| `db` | `PgPool` (Task 4) + DB error mapping (Task 5) | pool acquire/release, query time, error category |
+| `jwks` | `JwksCache` (Task 8) | cache miss, key rotation, refresh latency, parse failures |
+| `server` | `main.cc` + signal handling (Task 15) | startup, config load result, shutdown, SIGHUP-level reload |
+
+**Levels** (spdlog standard): `trace / debug / info / warn / error / critical`. Default `info`.
+
+**Sinks**:
+
+- **stdout** (color sink, TTY auto-detect): receives every level ≥ `LOG_LEVEL`. INFO/WARN/DEBUG/TRACE go here.
+- **stderr** (color sink, TTY auto-detect): receives **only** `error` and `critical`. Lets log shippers split "operational noise" from "needs attention" along the conventional UNIX boundary.
+- **rotating file sink** (only if `LOG_FILE` is set): receives every level ≥ `LOG_LEVEL`. Default rotation: 100 MB × 7 files. Path defaults to `${LOG_FILE}` — Docker users typically mount a tmpfs or volume here for graceful log rotation.
+
+**Format** (default = text):
+
+```
+[2026-07-31 08:04:00.123 +0800] [info] [auth] method=CreateVehicle subject=alice reason=ok req_id=7a3f...
+```
+
+`%+` color flag is on by default for stderr/stdout when the destination is a TTY; off when piped to a file. JSON output is deferred to v2 — text is the canonical format for v1 (grep-friendly, sufficient for `journald` / fluentd / Loki parsing with `| awk` or `jq`).
+
+**Conventions**:
+
+- **Never log secrets**: no `Authorization` header values, no JWT tokens, no DB passwords, no PEM private keys, no JWKS responses verbatim.
+- **Auth outcome log format** (on every RPC): one of
+  - Pass: `method=<RPC> subject=<sub> reason=ok req_id=<uuid>`
+  - Fail: `method=<RPC> subject=<unknown> reason=<category> req_id=<uuid>`
+    where `<category>` is one of `missing_header`, `non_bearer`, `malformed`, `bad_signature`, `expired`, `unknown_kid`, `wrong_issuer`, `wrong_audience` (NOT the raw error message).
+- **Service entry/exit log**: `service.info("req_id={} method={} subject={}", ...)` on entry; `service.info("req_id={} method={} status={} latency_ms={}", ...)` on exit (success or failure). Service handlers should call these via a small `RpcScope` RAII helper (introduced in Task 10) that times the handler and logs on destruction.
+- **No log spam at INFO**: HTTP-cache refresh (JWKS) and pool acquire/release are `debug`, not `info`.
+
+**Env vars** (read at `log::Init()`):
+
+| Var | Default | Notes |
+|---|---|---|
+| `LOG_LEVEL` | `info` | applies to all sinks (per-sink overrides not exposed in v1) |
+| `LOG_FORMAT` | `text` | text only in v1; `json` is reserved (rejected with warning, falls back to text) |
+| `LOG_FILE` | empty | if set, enables the rotating file sink at this path |
+| `LOG_FILE_MAX_SIZE_MB` | `100` | rotation size threshold |
+| `LOG_FILE_MAX_FILES` | `7` | number of rotated files retained |
 
 ---
 
@@ -438,13 +488,15 @@ Server refuses to start if any required env var is missing.
 
 - Exact `FetchContent` vs `vcpkg` vs `apt` for dependencies
 - CMake target structure (single library, multiple libraries, monorepo)
-- Logging library choice (e.g., `spdlog`, `glog`, raw `std::cerr`)
 - Whether to add Prometheus metrics endpoint (likely out for v1)
 - Specific index set beyond `idx_consumption_vehicle_start` and `idx_charging_vehicle_starttime`
 - **JWKS HTTP client choice** (`libcurl` vs `cpr` vs other)
 - **JWKS cache eviction strategy** (TTL + key rotation handling)
 - **JWT library choice** (`jwt-cpp` vs writing a minimal RS256 verifier)
 - **Test JWT generation strategy** (mock IdP via testcontainers vs static test RSA keys)
+
+**Logging decision (closed 2026-07-31, Task 9.5):** `spdlog` v1.x. See §5.6.
+**Log format decision (closed 2026-07-31):** structured text default, JSON deferred to v2.
 
 ---
 

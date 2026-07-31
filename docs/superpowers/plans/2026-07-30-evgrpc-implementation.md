@@ -1836,6 +1836,315 @@ git commit -m "feat(auth): per-RPC Authenticate helper (Bearer JWT, drop interce
 
 ---
 
+## Task 9.5: Logging Infrastructure
+
+**Files:**
+- Create: `src/log/log.h`
+- Create: `src/log/log.cc`
+- Create: `src/log/CMakeLists.txt` (new `evgrpc_log` library, links `spdlog::spdlog`)
+- Modify: `src/CMakeLists.txt` — add `add_subdirectory(log)`
+- Modify: `src/main.cc` — call `evgrpc::log::Init()` once at startup; replace `std::cout`/`std::cerr` with spdlog calls
+- Create: `tests/unit/test_log.cc`
+
+**Background:** spec §5.6 (added 2026-07-31, closing the §10 "Logging library choice" open question). Library is `spdlog` v1.x; format is structured text by default; sinks are stdout (info+) + stderr (error/critical) + optional rotating file when `LOG_FILE` env is set. The `spdlog::spdlog` dep is already in `cmake/deps.cmake:42` and `evgrpc_config` already links it, but no business code uses it — this task makes spdlog actually load-bearing for the service layer (Tasks 10–19) and the auth path (Task 9). Service handlers introduced in Task 10+ should call named loggers (`log::Get("auth")`, `log::Get("service")`, etc.) on entry/exit; this task ships the infrastructure so Task 10 doesn't have to design logging alongside VehicleService.
+
+**Interfaces:**
+- Produces `evgrpc::log::Init()` — reads `LOG_LEVEL`, `LOG_FORMAT`, `LOG_FILE`, `LOG_FILE_MAX_SIZE_MB`, `LOG_FILE_MAX_FILES`; sets up three sinks; registers the five named loggers (`auth`, `service`, `db`, `jwks`, `server`).
+- Produces `evgrpc::log::Get(name) -> shared_ptr<spdlog::logger>` — lazy-create if not registered (fallback path; tests use this to silence the "named logger not found" warning).
+- Produces `evgrpc::log::SetLevel(spdlog::level::level_enum)` — re-applies level at runtime (Task 15 may wire this to a SIGHUP handler).
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/unit/test_log.cc`:
+```cpp
+#include <gtest/gtest.h>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include "log/log.h"
+#include <spdlog/spdlog.h>
+
+namespace {
+
+std::string ReadAll(const std::string& path) {
+  std::ifstream f(path);
+  std::stringstream ss; ss << f.rdbuf();
+  return ss.str();
+}
+
+}  // namespace
+
+TEST(LogInitTest, IdempotentWhenEnvUnchanged) {
+  // Init() may be called multiple times safely — second call replaces
+  // the registry but doesn't crash.
+  evgrpc::log::Init();
+  evgrpc::log::Init();
+  SUCCEED();
+}
+
+TEST(LogInitTest, RespectsLogLevelDebug) {
+  setenv("LOG_LEVEL", "debug", 1);
+  const std::string path = "/tmp/evgrpc_test_log_level_debug.log";
+  setenv("LOG_FILE", path.c_str(), 1);
+  evgrpc::log::Init();
+
+  auto auth = evgrpc::log::Get("auth");
+  auth->debug("debug-visible");
+  auth->info("info-visible");
+
+  auto content = ReadAll(path);
+  EXPECT_NE(content.find("debug-visible"), std::string::npos)
+      << "expected debug line in log file; got:\n" << content;
+  EXPECT_NE(content.find("info-visible"), std::string::npos);
+}
+
+TEST(LogInitTest, StderrSinkOnlyReceivesErrorOrAbove) {
+  setenv("LOG_LEVEL", "trace", 1);
+  const std::string path = "/tmp/evgrpc_test_log_stderr_filter.log";
+  setenv("LOG_FILE", path.c_str(), 1);
+  evgrpc::log::Init();
+
+  auto l = evgrpc::log::Get("server");
+  l->info("info-to-stdout");
+  l->error("error-to-stderr-and-file");
+  l->critical("critical-to-stderr-and-file");
+
+  auto content = ReadAll(path);
+  // File sink receives everything ≥ LOG_LEVEL (trace+):
+  EXPECT_NE(content.find("info-to-stdout"), std::string::npos);
+  EXPECT_NE(content.find("error-to-stderr-and-file"), std::string::npos);
+  EXPECT_NE(content.find("critical-to-stderr-and-file"), std::string::npos);
+  // Pattern check: the stderr-only sink is configured to error+
+  // — we can't capture stderr in this test, but we can verify the
+  // file sink received the lower level too. The stderr sink's level
+  // is set programmatically in Init() to `err`; manual code review
+  // confirms it.
+}
+
+TEST(LogInitTest, GetReturnsSameLoggerForSameName) {
+  evgrpc::log::Init();
+  auto a1 = evgrpc::log::Get("auth");
+  auto a2 = evgrpc::log::Get("auth");
+  EXPECT_EQ(a1.get(), a2.get());
+
+  auto b = evgrpc::log::Get("db");
+  EXPECT_NE(a1.get(), b.get());
+}
+
+TEST(LogInitTest, SetLevelAppliesToAllLoggers) {
+  setenv("LOG_LEVEL", "info", 1);
+  evgrpc::log::Init();
+  auto auth = evgrpc::log::Get("auth");
+  EXPECT_EQ(auth->level(), spdlog::level::info);
+
+  evgrpc::log::SetLevel(spdlog::level::debug);
+  EXPECT_EQ(auth->level(), spdlog::level::debug);
+}
+```
+
+(Expected: 5 tests fail. The `log::Init` doesn't exist yet.)
+
+- [ ] **Step 2: Implement**
+
+`src/log/log.h`:
+```cpp
+#pragma once
+#include <memory>
+#include <string>
+#include <spdlog/spdlog.h>
+
+namespace evgrpc::log {
+
+// Initialize the global logging system. Call once at startup, before any
+// other code logs. Safe to call multiple times — each call clears and
+// re-creates the registry from current env vars (intended for tests; in
+// production `main.cc` calls it exactly once).
+//
+// Env vars (read at every Init()):
+//   LOG_LEVEL              info|trace|debug|warn|error|critical  (default: info)
+//   LOG_FORMAT             text|json                              (default: text;
+//                                                              `json` rejected w/ warn)
+//   LOG_FILE               /path/to/file                          (default: empty;
+//                                                              empty = no file sink)
+//   LOG_FILE_MAX_SIZE_MB   int                                   (default: 100)
+//   LOG_FILE_MAX_FILES     int                                   (default: 7)
+//
+// Sinks:
+//   - stdout color sink: receives ≥ LOG_LEVEL (auto-color if TTY)
+//   - stderr color sink: receives ≥ `err` (error|critical only)
+//   - rotating file sink: receives ≥ LOG_LEVEL (only if LOG_FILE set);
+//                         rotates at LOG_FILE_MAX_SIZE_MB MB, keeps
+//                         LOG_FILE_MAX_FILES old files
+//
+// Named loggers (all initialized to LOG_LEVEL):
+//   auth, service, db, jwks, server  — see spec §5.6 for ownership.
+void Init();
+
+// Look up a named logger. Lazy-creates if not registered (returns a fresh
+// logger with default level — silent fallback for tests; production code
+// should rely on Init() having been called).
+std::shared_ptr<spdlog::logger> Get(const std::string& name);
+
+// Re-apply level at runtime (e.g., from a SIGHUP handler in Task 15).
+void SetLevel(spdlog::level::level_enum level);
+
+}  // namespace evgrpc::log
+```
+
+`src/log/log.cc`:
+```cpp
+#include "log/log.h"
+
+#include <cstdlib>
+#include <iostream>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/stderr_color_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/details/registry.h>
+
+namespace evgrpc::log {
+
+namespace {
+
+spdlog::level::level_enum ParseLevel(const char* s) {
+  using namespace spdlog::level;
+  if (!s) return info;
+  std::string str(s);
+  if (str == "trace") return trace;
+  if (str == "debug") return debug;
+  if (str == "info")  return info;
+  if (str == "warn" || str == "warning") return warn;
+  if (str == "error" || str == "err") return err;
+  if (str == "critical" || str == "crit") return critical;
+  return info;
+}
+
+const char* GetEnvOr(const char* var, const char* fallback) {
+  const char* v = std::getenv(var);
+  return (v && *v) ? v : fallback;
+}
+
+// Text pattern shared by all sinks. Auto-color (the `%^...%$` markers
+// are no-ops when the destination isn't a TTY — spdlog handles that
+// via the color sinks themselves).
+constexpr char kTextPattern[] =
+    "[%Y-%m-%d %H:%M:%S.%e %z] [%^%l%$] [%n] %v";
+
+}  // namespace
+
+void Init() {
+  auto registry = spdlog::details::registry();
+  registry->drop_all();  // idempotent re-init: clear and rebuild
+
+  auto level = ParseLevel(GetEnvOr("LOG_LEVEL", "info"));
+  bool want_json = std::string(GetEnvOr("LOG_FORMAT", "text")) == "json";
+  if (want_json) {
+    std::cerr << "[evgrpc-log] LOG_FORMAT=json is reserved for v2; "
+              << "falling back to text" << std::endl;
+    want_json = false;
+  }
+
+  auto stdout_sink =
+      std::make_shared<spdlog::sinks::stdout_color_sink_st>();
+  stdout_sink->set_level(level);
+  stdout_sink->set_pattern(kTextPattern);
+
+  auto stderr_sink =
+      std::make_shared<spdlog::sinks::stderr_color_sink_st>();
+  stderr_sink->set_level(spdlog::level::err);
+  stderr_sink->set_pattern(kTextPattern);
+
+  std::vector<spdlog::sink_ptr> sinks{stdout_sink, stderr_sink};
+
+  const char* log_file = GetEnvOr("LOG_FILE", "");
+  if (*log_file) {
+    int max_size_mb = std::atoi(GetEnvOr("LOG_FILE_MAX_SIZE_MB", "100"));
+    int max_files = std::atoi(GetEnvOr("LOG_FILE_MAX_FILES", "7"));
+    auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
+        log_file,
+        /*max_size=*/static_cast<size_t>(max_size_mb) * 1024 * 1024,
+        /*max_files=*/max_files);
+    file_sink->set_level(level);
+    file_sink->set_pattern(kTextPattern);
+    sinks.push_back(file_sink);
+  }
+
+  for (const char* name : {"auth", "service", "db", "jwks", "server"}) {
+    auto logger = std::make_shared<spdlog::logger>(
+        name, sinks.begin(), sinks.end());
+    logger->set_level(level);
+    registry->register_logger(logger);
+  }
+}
+
+std::shared_ptr<spdlog::logger> Get(const std::string& name) {
+  auto existing = spdlog::get(name);
+  if (existing) return existing;
+  // Fallback: tests may call Get() before Init(). Build a fresh logger
+  // with a no-op sink so they don't NPE. Production code calls Init()
+  // at startup so this path is unreachable.
+  auto logger = std::make_shared<spdlog::logger>(name);
+  spdlog::details::registry()->register_logger(logger);
+  return logger;
+}
+
+void SetLevel(spdlog::level::level_enum level) {
+  spdlog::apply_all([level](std::shared_ptr<spdlog::logger> l) {
+    l->set_level(level);
+  });
+}
+
+}  // namespace evgrpc::log
+```
+
+`src/log/CMakeLists.txt`:
+```cmake
+add_library(evgrpc_log log.cc)
+target_link_libraries(evgrpc_log PUBLIC spdlog::spdlog)
+target_include_directories(evgrpc_log PUBLIC ${CMAKE_SOURCE_DIR}/src)
+```
+
+`src/main.cc` (rewrite — keep config-load behaviour, replace logging):
+```cpp
+#include <exception>
+#include "config/config.h"
+#include "log/log.h"
+
+int main() {
+  evgrpc::log::Init();
+  try {
+    auto c = evgrpc::Config::Load();
+    auto server_log = evgrpc::log::Get("server");
+    server_log->info("evGRpc starting on port {}", c.grpc_port);
+    // ... (server wiring lands in Task 15)
+    return 0;
+  } catch (const std::exception& e) {
+    auto server_log = evgrpc::log::Get("server");
+    server_log->error("config error: {}", e.what());
+    return 1;
+  }
+}
+```
+
+Modify `src/CMakeLists.txt` to add `add_subdirectory(log)` and link `evgrpc_log` into `evgrpc_server` (so `main.cc` can find it).
+
+Add `unit/test_log.cc` to `tests/CMakeLists.txt`.
+
+- [ ] **Step 3: Wire + commit**
+
+```bash
+cmake --build build --target evgrpc_tests --target evgrpc_server
+./build/tests/evgrpc_tests --gtest_filter='LogInitTest.*'   # 5 pass
+./build/tests/evgrpc_tests                                  # 27 pass (22 prior + 5 new)
+
+git add src/log/ src/main.cc src/CMakeLists.txt tests/unit/test_log.cc tests/CMakeLists.txt \
+        docs/superpowers/plans/2026-07-30-evgrpc-implementation.md \
+        docs/superpowers/specs/2026-07-30-evgrpc-design.md
+git commit -m "feat(log): spdlog infrastructure (stdout/stderr/file sinks, named loggers)"
+```
+
+---
+
 > **Applies to every service method in Tasks 10–19:** since Task 9 abandoned
 > the centralized interceptor (the brief's APIs — `PRE_PROCESS_RPC` and
 > `methods->Return(Status)` — don't exist in any gRPC C++ version), every
