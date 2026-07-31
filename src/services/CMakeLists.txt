@@ -10,6 +10,7 @@ target_link_libraries(evgrpc_services PUBLIC
   evgrpc_auth         # JwtValidator + Authenticate
   evgrpc_util         # NewUuid + RpcScope
   evgrpc_log          # spdlog named loggers
+  evgrpc_proto        # generated *.pb.cc + *.grpc.pb.cc symbols
   grpc++
   protobuf::libprotobuf
   Threads::Threads

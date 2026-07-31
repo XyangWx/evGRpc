@@ -68,6 +68,11 @@ void Init() {
         /*max_size=*/static_cast<size_t>(max_size_mb) * 1024 * 1024,
         /*max_files=*/max_files);
     file_sink->set_level(level);
+    // Note: rotating_file_sink_st doesn't expose flush_on() at the
+    // sink level (per spdlog v1.13). Flush-on-error is configured on
+    // each logger below (logger->flush_on(err)) — that flushes ALL
+    // attached sinks including this file sink, so error events make it
+    // to disk before the buffer decides to flush on rotation.
     file_sink->set_pattern(kTextPattern);
     sinks.push_back(file_sink);
   }
@@ -76,6 +81,12 @@ void Init() {
     auto logger = std::make_shared<spdlog::logger>(
         name, sinks.begin(), sinks.end());
     logger->set_level(level);
+    // Flush on every error+ so auth-rejection / DB-fail events
+    // reach the file sink before the buffer decides to flush on
+    // rotation. Critical for forensics — if the server crashes
+    // mid-request, the "auth failed" line is already on disk
+    // instead of lost in a 100MB buffer.
+    logger->flush_on(spdlog::level::err);
     spdlog::register_logger(logger);
   }
 }
