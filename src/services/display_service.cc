@@ -5,6 +5,7 @@
 #include <string>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "services/charger/charger_type.h"
 #include "util/rpc_scope.h"
 
 namespace evgrpc {
@@ -231,6 +232,118 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
     return grpc::Status::OK;
   } catch (const std::exception& e) {
     auto s = ToGrpcStatus(e);
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetCostByChargerType(
+    grpc::ServerContext* ctx, const GetCostByChargerTypeRequest* req,
+    GetCostByChargerTypeResponse* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetCostByChargerType";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    auto start_ts = MaybeTimestamp(req->start_time());
+    auto end_ts = MaybeTimestamp(req->end_time());
+
+    // GROUP BY ChargerType. CAST to CHARGER_TYPE_ENUM is a no-op
+    // identity (it's already typed), but the SUMs need DOUBLE PRECISION
+    // casts so the proto doubles resolve.
+    auto result = tx.exec_params(
+        "SELECT ChargerType, "
+        "       COALESCE(SUM(Cost), 0)::DOUBLE PRECISION AS total_cost, "
+        "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
+        "FROM charging "
+        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
+        "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "GROUP BY ChargerType "
+        "ORDER BY ChargerType",
+        // Optional vehicle_id: bind std::nullopt when unset so SQL
+        // gets NULL and the `($1::TEXT IS NULL OR VehicleId = $1)`
+        // predicate is satisfied (matches all vehicles).
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts,
+        end_ts);
+
+    for (const auto& row : result) {
+      auto* b = resp->add_breakdowns();
+      b->set_charger_type(ChargerTypeFromLabel(row["ChargerType"].as<std::string>()));
+      b->set_total_cost(row["total_cost"].as<double>());
+      b->set_total_kwh(row["total_kwh"].as<double>());
+      const double total_kwh = row["total_kwh"].as<double>();
+      b->set_avg_yuan_per_kwh(total_kwh > 0
+                                  ? row["total_cost"].as<double>() / total_kwh
+                                  : 0.0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    evgrpc::log::Get("db")->warn(
+        "method=GetCostByChargerType vehicle_id={} reason={}",
+        req->vehicle_id(), e.what());
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
+    grpc::ServerContext* ctx, const GetCostBySourceCategoryRequest* req,
+    GetCostBySourceCategoryResponse* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetCostBySourceCategory";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    auto start_ts = MaybeTimestamp(req->start_time());
+    auto end_ts = MaybeTimestamp(req->end_time());
+
+    // JOIN charging ⨝ source_category to get the category name.
+    // GROUP BY source_category so each row = one breakdown.
+    auto result = tx.exec_params(
+        "SELECT c.SourceCategoryId, sc.Name AS SourceCategoryName, "
+        "       COALESCE(SUM(c.Cost), 0)::DOUBLE PRECISION AS total_cost, "
+        "       COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
+        "FROM charging c "
+        "JOIN source_category sc ON sc.Id = c.SourceCategoryId "
+        "WHERE ($1::TEXT IS NULL OR c.VehicleId = $1) "
+        "  AND ($2::TIMESTAMP IS NULL OR c.StartTime >= $2) "
+        "  AND ($3::TIMESTAMP IS NULL OR c.StartTime <= $3) "
+        "GROUP BY c.SourceCategoryId, sc.Name "
+        "ORDER BY total_cost DESC",
+        req->vehicle_id().empty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{req->vehicle_id()},
+        start_ts,
+        end_ts);
+
+    for (const auto& row : result) {
+      auto* b = resp->add_breakdowns();
+      b->set_source_category_id(row["SourceCategoryId"].as<std::string>());
+      b->set_source_category_name(row["SourceCategoryName"].as<std::string>());
+      b->set_total_cost(row["total_cost"].as<double>());
+      b->set_total_kwh(row["total_kwh"].as<double>());
+      const double total_kwh = row["total_kwh"].as<double>();
+      b->set_avg_yuan_per_kwh(total_kwh > 0
+                                  ? row["total_cost"].as<double>() / total_kwh
+                                  : 0.0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    evgrpc::log::Get("db")->warn(
+        "method=GetCostBySourceCategory vehicle_id={} reason={}",
+        req->vehicle_id(), e.what());
     scope.set_status(s);
     return s;
   }

@@ -5,6 +5,7 @@ add_library(evgrpc_services
   consumption_service.cc
   charging_service.cc
   display_service.cc
+  charger/charger_type.cc
 )
 target_link_libraries(evgrpc_services PUBLIC
   evgrpc_db           # PgPool + ToGrpcStatus

@@ -6,6 +6,7 @@
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "log/log.h"
+#include "services/charger/charger_type.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -22,22 +23,6 @@ std::string TimestampString(const google::protobuf::Timestamp& ts) {
 bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
   if (s.empty()) return false;
   return google::protobuf::util::TimeUtil::FromString(s, out);
-}
-
-// ChargerType enum: SQL stores as a string label
-// (`CHARGER_TYPE_FAST` / `CHARGER_TYPE_SLOW`); proto uses the int value
-// of the enum (1 / 2 / 0). Convert both ways.
-const char* ChargerTypeLabel(ChargerType t) {
-  switch (t) {
-    case ChargerType::CHARGER_TYPE_FAST: return "FAST";
-    case ChargerType::CHARGER_TYPE_SLOW: return "SLOW";
-    default: return nullptr;  // UNSPECIFIED -> NULL via SQL
-  }
-}
-ChargerType ChargerTypeFromLabel(const std::string& s) {
-  if (s == "FAST") return ChargerType::CHARGER_TYPE_FAST;
-  if (s == "SLOW") return ChargerType::CHARGER_TYPE_SLOW;
-  return ChargerType::CHARGER_TYPE_UNSPECIFIED;
 }
 
 // Map a SQL row to the Charging proto.

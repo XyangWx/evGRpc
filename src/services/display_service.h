@@ -31,6 +31,12 @@ class DisplayServiceImpl final : public DisplayService::Service {
   grpc::Status GetAnnualReport(grpc::ServerContext*,
                                 const GetAnnualReportRequest*,
                                 PeriodReport*) override;
+  grpc::Status GetCostByChargerType(
+      grpc::ServerContext*, const GetCostByChargerTypeRequest*,
+      GetCostByChargerTypeResponse*) override;
+  grpc::Status GetCostBySourceCategory(
+      grpc::ServerContext*, const GetCostBySourceCategoryRequest*,
+      GetCostBySourceCategoryResponse*) override;
 
  private:
   PgPool* pool_;
