@@ -11,15 +11,27 @@ namespace evgrpc {
 // via the `service` named logger, per spec §5.6.
 //
 // Usage in a service method body:
-//   grpc::Status CreateVehicle(grpc::ServerContext* ctx, ...) override {
-//     RpcScope scope("/evgrpc.VehicleService/CreateVehicle",
-//                    ctx->client_metadata(), /*subject=*/"");
-//     auto auth = evgrpc::Authenticate(scope.metadata(), *validator_);
-//     if (!auth.ok()) { scope.set_status(auth); return auth; }
-//     // ... business logic
-//     scope.set_status(some_status);
-//     return scope.status();
-//   }
+//   const auto req_id = evgrpc::NewReqId();
+//   Claims claims;
+//   auto auth = evgrpc::Authenticate(scope.metadata(), *validator_, &claims);
+//   evgrpc::log::Get("auth")->info(
+//       "method=... subject={} reason={} req_id={}", ...);
+//   RpcScope scope("/evgrpc.X/Y", ctx->client_metadata(),
+//                  auth.ok() ? claims.subject : "<unknown>", req_id);
+//   if (!auth.ok()) { scope.set_status(auth); return auth; }
+//   // ... business logic
+//   scope.set_status(s);
+//   return scope.status();
+//
+// Constructor params:
+//   `method`   — fully-qualified RPC name (e.g. "/evgrpc.VehicleService/CreateVehicle")
+//   `metadata` — initial-metadata multimap from the gRPC call (typically
+//                `ctx->client_metadata()`); re-exposed via `.metadata()` so
+//                the body can pass it to `Authenticate()`.
+//   `subject`  — JWT `sub` claim on auth pass; `<unknown>` on auth fail.
+//   `req_id`   — correlation id; if empty, RpcScope generates one
+//                internally. Pass an explicit one (via `NewReqId()`) when
+//                the auth-outcome log line needs to share the id.
 //
 // Logs:
 //   [entry]  service.info("req_id={} method={} subject={}", ...)
@@ -28,7 +40,8 @@ class RpcScope {
  public:
   RpcScope(const std::string& method,
            const std::multimap<grpc::string_ref, grpc::string_ref>& metadata,
-           const std::string& subject);
+           const std::string& subject,
+           const std::string& req_id = "");
   ~RpcScope();
 
   RpcScope(const RpcScope&) = delete;
@@ -38,7 +51,6 @@ class RpcScope {
   void set_status(grpc::Status s) { status_ = s; }
   const grpc::Status& status() const { return status_; }
 
-  // Re-exposed metadata so the body can pass it to Authenticate().
   const std::multimap<grpc::string_ref, grpc::string_ref>& metadata() const {
     return metadata_;
   }

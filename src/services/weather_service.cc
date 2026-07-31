@@ -1,7 +1,7 @@
 #include "services/weather_service.h"
 
 #include <pqxx/pqxx>
-#include "auth/authenticate.h"
+#include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
@@ -13,11 +13,10 @@ WeatherServiceImpl::WeatherServiceImpl(PgPool* pool, JwtValidator* validator)
 
 grpc::Status WeatherServiceImpl::CreateWeather(
     grpc::ServerContext* ctx, const CreateWeatherRequest* req, Weather* resp) {
-  RpcScope scope("/evgrpc.WeatherService/CreateWeather",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.WeatherService/CreateWeather";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     auto conn = pool_->acquire();
@@ -41,11 +40,10 @@ grpc::Status WeatherServiceImpl::CreateWeather(
 grpc::Status WeatherServiceImpl::SearchWeather(
     grpc::ServerContext* ctx, const SearchWeatherRequest* req,
     SearchWeatherResponse* resp) {
-  RpcScope scope("/evgrpc.WeatherService/SearchWeather",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.WeatherService/SearchWeather";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     // Default limit 50 — matches Task 10's ListVehicles default and

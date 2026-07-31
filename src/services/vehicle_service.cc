@@ -2,9 +2,8 @@
 
 #include <google/protobuf/util/time_util.h>
 #include <pqxx/pqxx>
-#include "auth/authenticate.h"
+#include "auth/authenticate_rpc.h"
 #include "db/error.h"
-#include "log/log.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -48,23 +47,12 @@ std::string TimestampDateString(const google::protobuf::Timestamp& ts) {
 VehicleServiceImpl::VehicleServiceImpl(PgPool* pool, JwtValidator* validator)
     : pool_(pool), validator_(validator) {}
 
-// Authenticate helper that ALSO returns the subject on success.
-// Today's `evgrpc::Authenticate()` discards claims. Until that's
-// refactored (see task-10-report.md TODO), we accept subject="" in
-// RpcScope and let the `auth` logger capture the auth outcome separately.
-//
-// Wait — we DON'T want to log auth twice (here + in Authenticate).
-// For Task 10 we ship subject="" and accept the deferred TODO.
-// The `auth` logger's pass/fail reason IS logged by the implementer
-// of Authenticate() in a follow-up; for now neither logs auth.
-
 grpc::Status VehicleServiceImpl::CreateVehicle(
     grpc::ServerContext* ctx, const CreateVehicleRequest* req, Vehicle* resp) {
-  RpcScope scope("/evgrpc.VehicleService/CreateVehicle",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.VehicleService/CreateVehicle";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     auto conn = pool_->acquire();
@@ -97,11 +85,10 @@ grpc::Status VehicleServiceImpl::CreateVehicle(
 
 grpc::Status VehicleServiceImpl::GetVehicle(
     grpc::ServerContext* ctx, const GetVehicleRequest* req, Vehicle* resp) {
-  RpcScope scope("/evgrpc.VehicleService/GetVehicle",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.VehicleService/GetVehicle";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     auto conn = pool_->acquire();
@@ -126,11 +113,10 @@ grpc::Status VehicleServiceImpl::GetVehicle(
 
 grpc::Status VehicleServiceImpl::UpdateVehicle(
     grpc::ServerContext* ctx, const UpdateVehicleRequest* req, Vehicle* resp) {
-  RpcScope scope("/evgrpc.VehicleService/UpdateVehicle",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.VehicleService/UpdateVehicle";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     auto conn = pool_->acquire();
@@ -164,11 +150,10 @@ grpc::Status VehicleServiceImpl::UpdateVehicle(
 grpc::Status VehicleServiceImpl::DeleteVehicle(
     grpc::ServerContext* ctx, const DeleteVehicleRequest* req,
     google::protobuf::Empty* resp) {
-  RpcScope scope("/evgrpc.VehicleService/DeleteVehicle",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.VehicleService/DeleteVehicle";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
     auto conn = pool_->acquire();
@@ -192,14 +177,13 @@ grpc::Status VehicleServiceImpl::DeleteVehicle(
 grpc::Status VehicleServiceImpl::ListVehicles(
     grpc::ServerContext* ctx, const ListVehiclesRequest* req,
     ListVehiclesResponse* resp) {
-  RpcScope scope("/evgrpc.VehicleService/ListVehicles",
-                 ctx->client_metadata(), /*subject=*/"");
-
-  auto auth = evgrpc::Authenticate(ctx->client_metadata(), *validator_);
-  if (!auth.ok()) { scope.set_status(auth); return auth; }
+  static constexpr const char* kMethod = "/evgrpc.VehicleService/ListVehicles";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
-    auto page_size = req->page_size() > 0 ? req->page_size() : 50;
+    int page_size = req->page_size() > 0 ? req->page_size() : 50;
     int offset = 0;
     if (!req->page_token().empty()) {
       offset = std::stoi(req->page_token());

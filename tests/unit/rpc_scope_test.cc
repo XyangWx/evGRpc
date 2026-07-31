@@ -41,3 +41,13 @@ TEST(RpcScopeTest, EachScopeHasUniqueReqId) {
   evgrpc::RpcScope b("/test.Service/Method", md, "alice");
   EXPECT_NE(a.req_id(), b.req_id());
 }
+
+TEST(RpcScopeTest, ExplicitReqIdIsPreserved) {
+  // Task 10.5: when the caller passes an explicit req_id (shared with
+  // the auth-outcome log line via AuthenticateRpc), RpcScope must use
+  // it verbatim instead of generating its own.
+  std::multimap<grpc::string_ref, grpc::string_ref> md;
+  const std::string shared = "deadbeefcafebabe1122334455667788";
+  evgrpc::RpcScope scope("/test.Service/Method", md, "alice", shared);
+  EXPECT_EQ(scope.req_id(), shared);
+}
