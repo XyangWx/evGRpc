@@ -1,4 +1,5 @@
 add_subdirectory(fixtures)
+add_subdirectory(integration)
 
 add_executable(evgrpc_tests
   test_main.cc

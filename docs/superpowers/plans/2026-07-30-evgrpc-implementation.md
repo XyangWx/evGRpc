@@ -6,7 +6,7 @@
 
 **Architecture:** Single gRPC binary hosting 6 services on one port. gRPC ServerInterceptor validates JWT bearer tokens against an external IdP via JWKS cache before every RPC. libpqxx talks to PostgreSQL. Multi-stage Dockerfile (CMake + Ninja + libpqxx + grpc++ + jwt-cpp + libcurl).
 
-**Tech Stack:** C++17 · gRPC++ · Protobuf · libpqxx · jwt-cpp · libcurl · nlohmann/json · spdlog · CMake + Ninja · gtest · testcontainers-cpp · Docker (multi-stage) · PostgreSQL 14+
+**Tech Stack:** C++20 · gRPC++ · Protobuf · libpqxx · jwt-cpp · libcurl · nlohmann/json · spdlog · CMake + Ninja · gtest · testcontainers-cpp · Docker (multi-stage) · PostgreSQL 14+
 
 **Spec:** `docs/superpowers/specs/2026-07-30-evgrpc-design.md`
 
@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- **Language:** C++17 (or later)
+- **Language:** C++20 (bumped from C++17 at Task 20 because testcontainers-cpp v0.2.0 declares `cxx_std_20` on its INTERFACE; mixing C++17 and C++20 in the same target graph would fail CMake's standard-value check. All existing code is C++17-compatible — the bump just enables C++20 features for new code.)
 - **Build:** CMake (`cmake -G Ninja`) + Ninja
 - **gRPC framework:** `grpc++` (C++)
 - **DB client:** `libpqxx` (PostgreSQL C++ binding)

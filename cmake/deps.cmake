@@ -60,12 +60,11 @@ FetchContent_Declare(
   GIT_TAG        7.9.2
   GIT_SHALLOW    TRUE
 )
-FetchContent_Declare(
-  nlohmann_json
-  GIT_REPOSITORY https://gh-proxy.com/https://github.com/nlohmann/json.git
-  GIT_TAG        v3.11.3
-  GIT_SHALLOW    TRUE
-)
+# nlohmann_json: provided by system package nlohmann-json3-dev (apt).
+# We avoid FetchContent here because testcontainers-cpp does
+# `find_package(nlohmann_json REQUIRED)` and would fail without an
+# installed nlohmann_jsonConfig.cmake; system package provides it.
+# jwt-cpp and testcontainers-cpp both pick it up via find_package.
 FetchContent_Declare(
   spdlog
   GIT_REPOSITORY https://gh-proxy.com/https://github.com/gabime/spdlog.git
@@ -78,19 +77,44 @@ FetchContent_Declare(
   GIT_TAG        v1.14.0
   GIT_SHALLOW    TRUE
 )
-# testcontainers_cpp: deferred — the canonical repo
-#   https://github.com/testcontainers/testcontainers-cpp (tag v0.20.0)
-# referenced by the plan/brief no longer exists on GitHub (returns 404), and
-# the project has moved to https://github.com/cppudge/testcontainers-cpp with a
-# new version scheme (v0.1.x/v0.2.x). Task 1 only needs the build skeleton;
-# testcontainers_cpp is not linked into evgrpc_server or evgrpc_tests. It is
-# reintroduced in Task 20 once the correct repo/tag is confirmed.
-# FetchContent_Declare(
-#   testcontainers_cpp
-#   GIT_REPOSITORY https://gh-proxy.com/https://github.com/cppudge/testcontainers-cpp.git
-#   GIT_TAG        v0.2.0
-#   GIT_SHALLOW    TRUE
-# )
+# testcontainers_cpp: Task 20 reintroduction. The canonical repo
+#   https://github.com/testcontainers/testcontainers-cpp (tag v0.20.0
+#   referenced by the original plan) is no longer reachable on GitHub;
+#   the project moved to https://github.com/cppudge/testcontainers-cpp
+#   with the v0.2.0 release line (verified 2026-08-04 via git ls-remote).
+# Requires C++20 (declared on its INTERFACE via cxx_std_20). We disable
+# its bundled conan provider and link against system OpenSSL / libcurl
+# (already pulled in transitively via jwt-cpp + curl). On the test
+# machine, the Docker daemon must be reachable at /var/run/docker.sock.
+FetchContent_Declare(
+  testcontainers_cpp
+  GIT_REPOSITORY https://gh-proxy.com/https://github.com/cppudge/testcontainers-cpp.git
+  GIT_TAG        v0.2.0
+  GIT_SHALLOW    TRUE
+)
+# Disable TLS + host-port forwarding: drops OpenSSL + libssh2 from the
+# dep graph (we only need localhost http for the JWKS endpoint).
+# These options must be set BEFORE MakeAvailable since testcontainers-cpp
+# declares them via option() inside its own CMakeLists.
+set(TC_TLS OFF CACHE BOOL "" FORCE)
+set(TC_HOST_PORT_FORWARDING OFF CACHE BOOL "" FORCE)
+set(SKIP_CONAN_PROVIDER_CMAKE ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(TC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TC_BUILD_INTEGRATION_TESTS OFF CACHE BOOL "" FORCE)
+# testcontainers-cpp includes CTest unconditionally, which auto-enables
+# BUILD_TESTING and then fails on `find_package(GTest REQUIRED)`. We
+# don't want their unit tests in our graph (we run our own).
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# cpp-httplib: header-only HTTP server used by TestServer to serve the
+# JWKS endpoint on a random localhost port. Picked over Crow / Pistache
+# because it's a single header + no link-time deps.
+FetchContent_Declare(
+  cpp_httplib
+  GIT_REPOSITORY https://gh-proxy.com/https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG        v0.18.5
+  GIT_SHALLOW    TRUE
+)
 FetchContent_Declare(
   jwt_cpp
   GIT_REPOSITORY https://gh-proxy.com/https://github.com/Thalhammer/jwt-cpp.git
@@ -137,7 +161,11 @@ set(gRPC_INSTALL              OFF CACHE BOOL "" FORCE)
 # correctly above. Verified to silence the abseil-export storm that
 # started at Task 17 / 48c6d3384.
 set(CMAKE_SKIP_INSTALL_RULES   ON  CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(grpc protobuf libpqxx nlohmann_json spdlog googletest jwt_cpp)
+FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
+FetchContent_MakeAvailable(testcontainers_cpp)
+
+# nlohmann_json — system package (nlohmann-json3-dev).
+find_package(nlohmann_json 3.11.0 REQUIRED)
 
 # gRPC's CMake config defaults to using its bundled third_party/protobuf for
 # protobuf headers (gRPC_PROTOBUF_PROVIDER=module). We didn't fetch that
