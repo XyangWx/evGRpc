@@ -10,6 +10,7 @@
 #include <grpcpp/grpcpp.h>
 #include <google/protobuf/timestamp.pb.h>
 #include <gtest/gtest.h>
+#include <pqxx/pqxx>
 
 #include <memory>
 
@@ -22,6 +23,18 @@ namespace evgrpc::test {
 
 TEST(E2ESmoke, CreateThenListVehicle) {
   auto pg = std::make_shared<PgContainer>();
+  // Truncate the table this test touches so re-running doesn't trip
+  // the unique constraint on `vehicle.licenseplate` from a previous
+  // run. In v1 the e2e suite runs serially; when we go parallel we'll
+  // move truncation into a per-test schema.
+  {
+    pqxx::connection c{pg->Conninfo()};
+    pqxx::nontransaction tx{c};
+    // CASCADE clears `consumption` (FK→vehicle) and `charging`
+    // (FK→vehicle + FK→source_category) automatically.
+    tx.exec("TRUNCATE vehicle RESTART IDENTITY CASCADE");
+    tx.commit();
+  }
   TestServer ts(pg);
   auto stub = evgrpc::VehicleService::NewStub(ts.Channel());
 
