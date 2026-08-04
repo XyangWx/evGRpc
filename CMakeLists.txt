@@ -10,5 +10,12 @@ include(cmake/protoc.cmake)
 
 # Subdirectories
 add_subdirectory(src)
-enable_testing()
-add_subdirectory(tests)
+
+# Tests are gated by EVGRPC_BUILD_TESTS so that production Docker
+# images can skip them without copying the tests/ directory into the
+# image at all.
+option(EVGRPC_BUILD_TESTS "Build unit + integration tests" ON)
+if(EVGRPC_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

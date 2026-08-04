@@ -1,0 +1,10 @@
+build/
+.git/
+docs/
+tests/
+.superpowers/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+*.md
+probe_interceptor2.o

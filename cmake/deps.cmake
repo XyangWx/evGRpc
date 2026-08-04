@@ -1,5 +1,10 @@
 include(FetchContent)
 
+# Need GIT_EXECUTABLE for the manual `git config --global ... insteadOf`
+# below. Without this, ${GIT_EXECUTABLE} is empty and execute_process
+# fails with exit code 1.
+find_package(Git REQUIRED)
+
 set(FETCHCONTENT_QUIET FALSE)
 
 # Note: this environment has severely rate-limited direct connectivity to
@@ -162,7 +167,14 @@ set(gRPC_INSTALL              OFF CACHE BOOL "" FORCE)
 # started at Task 17 / 48c6d3384.
 set(CMAKE_SKIP_INSTALL_RULES   ON  CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
-FetchContent_MakeAvailable(testcontainers_cpp)
+
+# testcontainers_cpp is only needed by the integration test fixture.
+# Production Docker images (and any other build that doesn't compile
+# tests/) can disable it to skip the Boost dependency.
+option(EVGRPC_WITH_TESTCONTAINERS "Populate testcontainers_cpp (needed for e2e tests)" ON)
+if(EVGRPC_WITH_TESTCONTAINERS)
+  FetchContent_MakeAvailable(testcontainers_cpp)
+endif()
 
 # nlohmann_json — system package (nlohmann-json3-dev).
 find_package(nlohmann_json 3.11.0 REQUIRED)
