@@ -1,7 +1,7 @@
 # evGRpc — Electric Vehicle Electricity Cost Tracking Service
 
 **Date:** 2026-07-30
-**Status:** Design — pending user approval
+**Status:** Implemented — all 23 plan tasks complete; tagged v0.1.0 (2026-08-05)
 **Repo:** `/workspace/repositories/evGRpc`
 
 ---

@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** ✅ Completed 2026-08-05 — all 23 task sections landed on `master`, tagged `v0.1.0` at `93086fe`. Tests: 38/38 unit + 1/1 e2e pass; `scripts/smoke.sh` exits 0 end-to-end against a freshly-built `evgrpc:dev` container.
+
 **Goal:** Build a C++ gRPC service that records and analyzes EV electricity costs, backed by PostgreSQL, protected by OAuth 2.0 (Resource Server / JWT / RS256 / JWKS), packaged in a multi-stage Docker image.
 
 **Architecture:** Single gRPC binary hosting 6 services on one port. gRPC ServerInterceptor validates JWT bearer tokens against an external IdP via JWKS cache before every RPC. libpqxx talks to PostgreSQL. Multi-stage Dockerfile (CMake + Ninja + libpqxx + grpc++ + jwt-cpp + libcurl).
