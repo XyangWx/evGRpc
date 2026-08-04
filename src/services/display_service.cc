@@ -519,7 +519,7 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
     //   - avg_temp = (HighestTemperature + LowestTemperature) / 2
     //   - mileage   = EndMileage - BeginMileage
     //   - kWh       = SUM(KwhCharged) for the same vehicle where
-    //                 StartTime is in [consumption.Start - 24h, consumption.End]
+    //                 StartTime is in [consumption.Start - 24h, consumption.EndTime]
     //                 (we look BACK 24h before the consumption because
     //                 charging typically precedes driving).
     //   - kWh_per_100km = (kWh / mileage) * 100

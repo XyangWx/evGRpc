@@ -41,7 +41,7 @@ Consumption RowToConsumption(const pqxx::row& r) {
   }
   {
     google::protobuf::Timestamp ts;
-    if (ParseTimestamp(r["End"].as<std::string>(), &ts)) {
+    if (ParseTimestamp(r["EndTime"].as<std::string>(), &ts)) {
       *c.mutable_end() = ts;
     }
   }

@@ -1,11 +1,16 @@
 -- 001_initial.sql
 -- Run against an external PostgreSQL 14+ database.
+-- Idempotent: safe to re-run.
 
 BEGIN;
 
-CREATE TYPE charger_type_enum AS ENUM ('fast', 'slow');
+DO $$ BEGIN
+    CREATE TYPE charger_type_enum AS ENUM ('fast', 'slow');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE vehicle (
+CREATE TABLE IF NOT EXISTS vehicle (
   Id               UUID PRIMARY KEY,
   Brand            VARCHAR(36)  NOT NULL,
   CalibratedRange  INTEGER       NOT NULL,
@@ -14,16 +19,16 @@ CREATE TABLE vehicle (
   LicensePlate     VARCHAR(15)   NOT NULL UNIQUE
 );
 
-CREATE TABLE weather (
+CREATE TABLE IF NOT EXISTS weather (
   Id    UUID PRIMARY KEY,
   Name  VARCHAR(36) NOT NULL UNIQUE
 );
 
-CREATE TABLE consumption (
+CREATE TABLE IF NOT EXISTS consumption (
   Id                  UUID PRIMARY KEY,
   VehicleId           UUID NOT NULL REFERENCES vehicle(Id),
   Start               TIMESTAMP NOT NULL,
-  End                 TIMESTAMP NOT NULL,
+  EndTime             TIMESTAMP NOT NULL,
   BeginPercent        INT NOT NULL,
   EndPercent          INT NOT NULL,
   BeginMileage        INT NOT NULL,
@@ -36,12 +41,12 @@ CREATE TABLE consumption (
   Remark              TEXT
 );
 
-CREATE TABLE source_category (
+CREATE TABLE IF NOT EXISTS source_category (
   Id    UUID PRIMARY KEY,
   Name  VARCHAR(36) NOT NULL UNIQUE
 );
 
-CREATE TABLE charging (
+CREATE TABLE IF NOT EXISTS charging (
   Id                    UUID PRIMARY KEY,
   VehicleId             UUID NOT NULL REFERENCES vehicle(Id),
   StartTime             TIMESTAMP NOT NULL,
@@ -60,7 +65,7 @@ CREATE TABLE charging (
   Remark                TEXT
 );
 
-CREATE INDEX idx_consumption_vehicle_start ON consumption(VehicleId, Start);
-CREATE INDEX idx_charging_vehicle_starttime ON charging(VehicleId, StartTime);
+CREATE INDEX IF NOT EXISTS idx_consumption_vehicle_start ON consumption(VehicleId, Start);
+CREATE INDEX IF NOT EXISTS idx_charging_vehicle_starttime ON charging(VehicleId, StartTime);
 
 COMMIT;
