@@ -1,5 +1,7 @@
 #include "fixtures/pg_container.h"
 
+#include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -22,14 +24,12 @@ std::string GetEnvOrThrow(const char* name) {
   const char* v = std::getenv(name);
   if (!v || !*v) {
     throw std::runtime_error(
-        std::string("PgContainer: required env var not set: ") + name);
+        std::string("PgContainer: required env var not set (or set DATABASE_URL to override): ") +
+        name);
   }
   return v;
 }
 
-// Parses a libpq-style "key=value key=value ..." conninfo string into
-// individual fields. Splits on whitespace; honors single-quoted values
-// (libpq's escape syntax is overkill for our env-controlled inputs).
 struct ParsedConninfo {
   std::string host;
   std::string port;
@@ -38,7 +38,109 @@ struct ParsedConninfo {
   std::string password;
 };
 
-ParsedConninfo ParseConninfo(const std::string& s) {
+// URL-decode helper. Handles %XX hex escapes; non-hex chars after %
+// are passed through verbatim (so a malformed % stays visible rather
+// than silently dropping).
+std::string UrlDecode(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  auto hex_val = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '%' && i + 2 < s.size()) {
+      int hi = hex_val(s[i + 1]);
+      int lo = hex_val(s[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        out += static_cast<char>((hi << 4) | lo);
+        i += 2;  // skip past the two hex chars; for-loop's ++i skips the '%'
+      } else {
+        out += s[i];
+      }
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+// Detects PostgreSQL URI form. Both schemes are accepted; libpq treats
+// them identically (the difference is just historical).
+//
+// Note: "postgres://" is 11 chars (postgres + "://"), not 10 — easy to
+// off-by-one when typing the prefix length. Using substr + == instead
+// of compare(pos, count, literal) so the comparison length is
+// self-evident and not a separate magic number.
+bool IsUrlForm(const std::string& s) {
+  return s.size() >= 13 && s.substr(0, 13) == "postgresql://" ||
+         s.size() >= 11 && s.substr(0, 11) == "postgres://";
+}
+
+// Parses postgresql://[user[:password]@][host][:port][/dbname][?params]
+// — the form every user-facing tool (psql \conninfo, scripts/smoke.sh,
+// the README, docker run -e DATABASE_URL=...) uses by default.
+ParsedConninfo ParseUrl(const std::string& s) {
+  ParsedConninfo out;
+
+  // 1. Strip scheme.
+  size_t i = s.find("://");
+  if (i == std::string::npos) {
+    throw std::runtime_error("PgContainer: URL missing '://': " + s);
+  }
+  i += 3;
+
+  // 2. Find authority end (next '/' or '?').
+  size_t auth_end = s.size();
+  for (size_t j = i; j < s.size(); ++j) {
+    if (s[j] == '/' || s[j] == '?') { auth_end = j; break; }
+  }
+
+  // 3. userinfo (before '@', if '@' is inside authority).
+  size_t at = s.find('@', i);
+  if (at != std::string::npos && at < auth_end) {
+    std::string userinfo = s.substr(i, at - i);
+    size_t colon = userinfo.find(':');
+    if (colon != std::string::npos) {
+      out.user = UrlDecode(userinfo.substr(0, colon));
+      out.password = UrlDecode(userinfo.substr(colon + 1));
+    } else {
+      out.user = UrlDecode(userinfo);
+    }
+    i = at + 1;
+  }
+
+  // 4. host[:port].
+  std::string hostport = s.substr(i, auth_end - i);
+  size_t colon = hostport.find(':');
+  if (colon != std::string::npos) {
+    out.host = hostport.substr(0, colon);
+    out.port = hostport.substr(colon + 1);
+  } else {
+    out.host = hostport;
+  }
+
+  // 5. dbname (between first '/' after authority and '?').
+  if (auth_end < s.size() && s[auth_end] == '/') {
+    i = auth_end + 1;
+    size_t q = s.find('?', i);
+    if (q == std::string::npos) q = s.size();
+    out.dbname = s.substr(i, q - i);
+  }
+
+  if (out.host.empty() || out.dbname.empty() || out.user.empty()) {
+    throw std::runtime_error(
+        "PgContainer: URL missing host/dbname/user: " + s);
+  }
+  return out;
+}
+
+// Parses libpq keyword/value conninfo: "host=... port=... dbname=...
+// user=... password=***". Splits on whitespace; honors single-quoted
+// values.
+ParsedConninfo ParseKeyword(const std::string& s) {
   ParsedConninfo out;
   size_t i = 0;
   while (i < s.size()) {
@@ -48,7 +150,8 @@ ParsedConninfo ParseConninfo(const std::string& s) {
     // Key.
     size_t eq = s.find('=', i);
     if (eq == std::string::npos) {
-      throw std::runtime_error("PgContainer: malformed conninfo (no '='): " + s);
+      throw std::runtime_error(
+          "PgContainer: malformed keyword conninfo (no '='): " + s);
     }
     std::string key = s.substr(i, eq - i);
     i = eq + 1;
@@ -82,6 +185,15 @@ ParsedConninfo ParseConninfo(const std::string& s) {
   return out;
 }
 
+// Dispatch entry. PostgreSQL accepts both URI and keyword forms; libpq
+// itself supports both natively — we just need to parse whichever the
+// caller hands us so we can populate the per-field accessors and
+// build the synthetic URL for connection_string_.
+ParsedConninfo ParseConninfo(const std::string& s) {
+  if (IsUrlForm(s)) return ParseUrl(s);
+  return ParseKeyword(s);
+}
+
 }  // namespace
 
 class PgContainer::Impl {
@@ -99,7 +211,9 @@ class PgContainer::Impl {
   Impl() {
     const char* db_url = std::getenv(kDatabaseUrlEnv);
     if (db_url && *db_url) {
-      conninfo_ = db_url;  // already libpq-style
+      // Accept both URI form (postgresql://u:p@h:1/db) and keyword
+      // form (host=... dbname=... user=...). ParseConninfo dispatches.
+      conninfo_ = db_url;
       auto p = ParseConninfo(conninfo_);
       host_ = p.host;
       port_ = static_cast<uint16_t>(std::stoi(p.port.empty() ? "5432" : p.port));
@@ -118,9 +232,10 @@ class PgContainer::Impl {
                   " user=" + username_ +
                   " password=" + password_;
     }
-    // URL form: postgresql://user:password@host:port/dbname. Password
-    // may contain URL-unsafe chars — don't URL-encode here; the smoke
-    // test runs against a local PG whose password we control.
+    // Synthetic URL form for callers that want to log/print a portable
+    // connection string. Built from the resolved fields, so it always
+    // matches the actual connection regardless of which form
+    // DATABASE_URL used.
     connection_string_ = "postgresql://" + username_ + ":" + password_ +
                           "@" + host_ + ":" + std::to_string(port_) +
                           "/" + database_;
