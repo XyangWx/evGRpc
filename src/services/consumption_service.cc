@@ -5,6 +5,7 @@
 #include <string>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "log/log.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
@@ -111,7 +112,7 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
     auto id = NewUuid();
-    tx.exec_params(
+    db::Exec(tx,
         "INSERT INTO consumption (Id, VehicleId, Start, End, "
         "BeginPercent, EndPercent, BeginMileage, EndMileage, "
         "BeginRange, EndRange, HighestTemperature, LowestTemperature, "
@@ -121,6 +122,7 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
         "RETURNING Id, VehicleId, Start::text, End::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
+        "ConsumptionService.CreateConsumption",
         id,
         req->vehicle_id(),
         TimestampString(req->start()),
@@ -140,11 +142,13 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
         req->remark());
     // Re-select to populate `resp` (the INSERT's RETURNING isn't
     // directly bindable through libpqxx 7.9.2's exec_params API).
-    auto inserted = tx.exec_params(
+    auto inserted = db::Exec(tx,
         "SELECT Id, VehicleId, Start::text, End::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark "
-        "FROM consumption WHERE Id=$1", id);
+        "FROM consumption WHERE Id=$1",
+        "ConsumptionService.CreateConsumption",
+        id);
     if (inserted.empty()) {
       auto s = grpc::Status(grpc::StatusCode::INTERNAL, "INSERT returned no row");
       scope.set_status(s);
@@ -175,11 +179,12 @@ grpc::Status ConsumptionServiceImpl::GetConsumption(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, VehicleId, Start::text, End::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark "
         "FROM consumption WHERE Id = $1",
+        "ConsumptionService.GetConsumption",
         req->id());
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "consumption not found");
@@ -229,7 +234,7 @@ grpc::Status ConsumptionServiceImpl::UpdateConsumption(
   try {
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "UPDATE consumption SET VehicleId=$2, Start=$3::timestamptz, "
         "End=$4::timestamptz, BeginPercent=$5, EndPercent=$6, "
         "BeginMileage=$7, EndMileage=$8, BeginRange=$9, EndRange=$10, "
@@ -238,6 +243,7 @@ grpc::Status ConsumptionServiceImpl::UpdateConsumption(
         "RETURNING Id, VehicleId, Start::text, End::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
+        "ConsumptionService.UpdateConsumption",
         req->id(),
         req->vehicle_id(),
         TimestampString(req->start()),
@@ -279,8 +285,10 @@ grpc::Status ConsumptionServiceImpl::DeleteConsumption(
   try {
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
-    auto result = tx.exec_params(
-        "DELETE FROM consumption WHERE Id=$1", req->id());
+    auto result = db::Exec(tx,
+        "DELETE FROM consumption WHERE Id=$1",
+        "ConsumptionService.DeleteConsumption",
+        req->id());
     if (result.affected_rows() == 0) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "consumption not found");
       scope.set_status(s);
@@ -345,7 +353,7 @@ grpc::Status ConsumptionServiceImpl::ListConsumptions(
     pqxx::nontransaction tx(*conn);
     pqxx::params p;
     for (const auto& v : params) p.append(v);
-    auto result = tx.exec_params(sql, p);
+    auto result = db::Exec(tx, sql, "ConsumptionService.ListConsumptions", p);
     bool has_more = result.size() > static_cast<size_t>(page_size);
     size_t emit = has_more ? static_cast<size_t>(page_size) : result.size();
     for (size_t i = 0; i < emit; ++i) {
