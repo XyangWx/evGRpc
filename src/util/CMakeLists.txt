@@ -2,6 +2,7 @@ add_library(evgrpc_util
   uuid.cc
   rpc_scope.cc
   req_id.cc
+  args.cc
 )
 target_link_libraries(evgrpc_util PUBLIC
   evgrpc_log
