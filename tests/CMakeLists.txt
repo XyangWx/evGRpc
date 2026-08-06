@@ -10,6 +10,7 @@ add_executable(evgrpc_tests
   unit/test_jwt_validator.cc
   unit/test_jwks_cache.cc
   unit/test_authenticate.cc
+  unit/test_oidc_discovery.cc
   unit/test_log.cc
   unit/uuid_test.cc
   unit/rpc_scope_test.cc

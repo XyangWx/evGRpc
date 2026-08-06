@@ -2,6 +2,18 @@ add_library(evgrpc_auth
   jwt_validator.cc
   jwks_cache.cc
   authenticate.cc   # Task 9 — per-RPC Bearer JWT helper
+  oidc_discovery.cc # Task 3 — GET /.well-known/openid-configuration
+)
+
+# OIDC discovery (Task 3) GETs {issuer}/.well-known/openid-configuration
+# at startup and parses the JSON body for the jwks_uri field. Uses
+# cpp-httplib's httplib::Client (http only on this code path) and
+# nlohmann_json for body parsing — both already available through
+# evgrpc_auth's existing transitive deps (nlohmann_json via jwks_cache,
+# cpp-httplib via evgrpc_test_fixtures which is a sibling target — but
+# evgrpc_auth itself does not depend on httplib yet, so link it now).
+target_link_libraries(evgrpc_auth PUBLIC
+  httplib::httplib
 )
 
 # jwt-cpp is header-only and is exposed by the cmake/deps.cmake
