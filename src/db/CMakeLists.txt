@@ -10,4 +10,8 @@ target_link_libraries(evgrpc_db PUBLIC libpqxx::pqxx)
 # only `add_library(grpc++ ...)`, no ALIAS). Same pattern as the existing
 # protoc.cmake comment about `grpc_cpp_plugin`.
 target_link_libraries(evgrpc_db PUBLIC grpc++)
+# evgrpc_db now emits debug log lines (Task 7); pulling evgrpc_log here
+# propagates the spdlog include path so pool.cc's `#include <spdlog/spdlog.h>`
+# resolves when compiled directly.
+target_link_libraries(evgrpc_db PUBLIC evgrpc_log)
 target_include_directories(evgrpc_db PUBLIC ${CMAKE_SOURCE_DIR}/src)

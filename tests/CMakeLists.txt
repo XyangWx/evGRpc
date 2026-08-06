@@ -13,6 +13,7 @@ add_executable(evgrpc_tests
   unit/test_oidc_discovery.cc
   unit/test_log.cc
   unit/test_args.cc
+  unit/test_pool_events.cc
   unit/uuid_test.cc
   unit/rpc_scope_test.cc
   unit/test_pg_container.cc
