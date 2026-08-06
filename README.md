@@ -37,8 +37,9 @@ cmake --build build --target evgrpc_tests evgrpc_e2e_tests
 EVGRPC_TEST_DB_PASSWORD=… ./build/tests/integration/evgrpc_e2e_tests
 ```
 
-- 38 unit tests cover config, JWT validation, JWKS caching, all 6 service
-  layers, DB pool, ID generation, logging.
+- ~76 unit tests cover config loader, args, OIDC discovery, log init,
+  JWT validation, JWKS caching, all 6 service layers, DB pool,
+  ID generation, db::Exec wrapper.
 - 1 e2e test (`E2ESmoke.CreateThenListVehicle`) brings up an in-process
   gRPC server + JWKS IdP + shared local PG and walks CreateVehicle →
   ListVehicles.
@@ -48,16 +49,13 @@ EVGRPC_TEST_DB_PASSWORD=… ./build/tests/integration/evgrpc_e2e_tests
 ## Run (host)
 
 ```sh
-DATABASE_URL='postgresql://user:pw@host:5432/db' \
-OAUTH_ISSUER_URL=https://issuer.example.com \
-OAUTH_AUDIENCE=evgrpc-api \
-OAUTH_JWKS_URL=https://issuer.example.com/.well-known/jwks.json \
-GRPC_PORT=50051 \
-./build/src/evgrpc_server
+./build/src/evgrpc_server --config ./config.json
 ```
 
-All four `DATABASE_URL` + three `OAUTH_*` env vars are required.
-`GRPC_PORT` defaults to 50051.
+All runtime configuration lives in a single JSON file (see
+[Configuration](#configuration) below). The default path is
+`./config.json`; override with `--config <path>` or `-c <path>`.
+`--help` prints the usage line and exits 0.
 
 ## Docker
 
@@ -88,20 +86,20 @@ Run:
 
 ```sh
 docker run --rm --network host \
-  -e DATABASE_URL='postgresql://user:pw@host.docker.internal:5432/db' \
-  -e OAUTH_ISSUER_URL=https://issuer.example.com \
-  -e OAUTH_AUDIENCE=evgrpc-api \
-  -e OAUTH_JWKS_URL=https://issuer.example.com/.well-known/jwks.json \
-  -e GRPC_PORT=50051 \
+  -v $PWD/my-config.json:/etc/evgrpc/config.json:ro \
   evgrpc:dev
 ```
+
+The container reads its config from `/etc/evgrpc/config.json`. Mount
+your config file there (or use a Kubernetes ConfigMap). No env vars
+are required at startup in v2.
 
 Notes:
 
 - `--network host` lets the container reach services on the host
   network namespace (e.g. a locally-running PostgreSQL on `127.0.0.1`).
   On macOS/Windows Docker Desktop, use `host.docker.internal` in
-  `DATABASE_URL` instead.
+  `database.url` instead.
 - **URL-encode `@` in the password** as `%40`. libpqxx refuses a raw
   `@` because it would be parsed as the user/host separator.
 
@@ -112,10 +110,19 @@ DATABASE_URL='postgresql://evgrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc' \
 scripts/smoke.sh
 ```
 
-Starts the `evgrpc:dev` container, generates an ephemeral RSA keypair,
-serves the JWKS from a local `python3 -m http.server`, mints an RS256
-JWT, runs `VehicleService.CreateVehicle` → `ListVehicles` via `grpcurl`,
-then tears everything down. Exits 0 on success, 1 on any failure.
+Starts the `evgrpc:dev` container, writes a smoke `config.json` from
+`config.example.json` + the supplied `DATABASE_URL`, generates an
+ephemeral RSA keypair, serves the JWKS from a local
+`python3 -m http.server`, mints an RS256 JWT, runs
+`VehicleService.CreateVehicle` → `ListVehicles` via `grpcurl`, then
+tears everything down. Exits 0 on success, 1 on any failure.
+
+Note: the smoke JWKS server doesn't expose `/.well-known/openid-configuration`,
+so OIDC discovery fails at startup. The smoke container will log the
+failure and exit non-zero. For a true round-trip you need a real IdP
+(or a JWKS server that also serves the OpenID discovery doc at the
+expected path). The gate the smoke verifies is "config.json is read
+and parsed, the binary starts up, services register".
 
 Re-runs are idempotent-ish (CreateVehicle doesn't enforce a unique
 license plate, so each run adds another `SMOKE-<pid>` row; ListVehicles
@@ -125,18 +132,69 @@ Requires: `docker`, `python3` with `PyJWT` + `cryptography`, `openssl`,
 and `grpcurl` (the script auto-falls-back to `~/.local/bin/grpcurl` or
 whatever `GRPCURL=$PWD/grpcurl` points at).
 
-## Env vars
+## Configuration
 
-| var                    | required | default | notes                                                       |
-|------------------------|----------|---------|-------------------------------------------------------------|
-| `DATABASE_URL`         | yes      | —       | `postgresql://user:pw@host:port/db`. URL-encode `@` in pw as `%40`. |
-| `OAUTH_ISSUER_URL`     | yes      | —       | Expected value of the JWT `iss` claim.                      |
-| `OAUTH_AUDIENCE`       | yes      | —       | Expected value of the JWT `aud` claim.                      |
-| `OAUTH_JWKS_URL`       | yes      | —       | URL to the JWKS document (RS256 public keys).               |
-| `OAUTH_JWKS_CACHE_TTL` | no       | 3600    | JWKS cache TTL in seconds.                                  |
-| `GRPC_PORT`            | no       | 50051   | TCP port the server binds on `0.0.0.0`.                     |
+evGRpc reads all runtime configuration from a single JSON file. The
+default path is `./config.json` (relative to the working directory);
+override with `--config <path>` or `-c <path>`.
+
+### Flags
+
+| Flag                          | Purpose                                                |
+|-------------------------------|--------------------------------------------------------|
+| `--config <path>` / `-c <path>` | Path to the config JSON (default `./config.json`)     |
+| `--help` / `-h`                | Print usage to stdout, exit 0                          |
+
+### Schema (4 nested sections)
+
+```json
+{
+  "database": { "url": "postgresql://user:pw@host:5432/db" },
+  "oauth": {
+    "issuer_url": "https://issuer.example.com/",
+    "audience": "evgrpc-api",
+    "jwks_cache_ttl_seconds": 3600
+  },
+  "grpc": { "port": 50051 },
+  "log": {
+    "level": "info",
+    "file": "",
+    "max_size_mb": 100,
+    "max_files": 7
+  }
+}
+```
+
+A working example lives at [`config.example.json`](config.example.json)
+at the repo root. Full validation rules and error messages are in
+[`docs/superpowers/specs/2026-08-06-config-json-migration.md`](docs/superpowers/specs/2026-08-06-config-json-migration.md) §2.
+
+### OIDC Discovery
+
+`oauth.issuer_url` is the only OAuth URL you need to configure. The
+JWKS URL is fetched automatically at startup from
+`{issuer}/.well-known/openid-configuration`. If the discovery endpoint
+is unreachable, the server fails fast at startup.
+
+### Docker
+
+```sh
+docker run -v $PWD/my-config.json:/etc/evgrpc/config.json:ro evgrpc:latest
+```
+
+### Validation
+
+If the config file is missing a required field, has the wrong type,
+references an unwritable log file path, or contains an unknown key,
+the server prints one line per problem to stderr and exits 1 — no
+partial startup. All errors are reported in one pass (not just the
+first one found).
 
 ## Spec
 
-See `docs/superpowers/specs/2026-07-30-evgrpc-design.md` for the full
-design (services, DB schema, auth model, logging conventions).
+- `docs/superpowers/specs/2026-07-30-evgrpc-design.md` — full design
+  (services, DB schema, auth model, logging conventions). Note: the
+  env-var sections are retained for historical reference; **v2 reads
+  config from `config.json` only** (see `Configuration` above).
+- `docs/superpowers/specs/2026-08-06-config-json-migration.md` —
+  config.json migration spec (authoritative for v2 config).

@@ -14,12 +14,9 @@
 #     --build-arg GIT_INSTEADOF=https://gh-proxy.com/https://github.com/ \
 #     -t evgrpc:dev .
 #
-# Run:
+# Run (v2: config.json only — no env vars required at startup):
 #   docker run --rm \
-#     -e DATABASE_URL=postgres://evgrpc_admin:***@host:5432/evgrpc \
-#     -e OAUTH_ISSUER_URL=https://idp.example/ \
-#     -e OAUTH_AUDIENCE=evgrpc \
-#     -e OAUTH_JWKS_URL=https://idp.example/.well-known/jwks.json \
+#     -v $PWD/my-config.json:/etc/evgrpc/config.json:ro \
 #     -p 50051:50051 evgrpc:dev
 
 # =====================================================================
@@ -163,9 +160,13 @@ WORKDIR /app
 
 COPY --from=builder /src/build/src/evgrpc_server /app/evgrpc_server
 
-# evgrpc_server requires DATABASE_URL + the three OAUTH_* env vars at
-# startup; GRPC_PORT defaults to 50051 (see src/config/config.cc).
-ENV GRPC_PORT=50051
+# Default config path (see src/util/args.{h,cc}). Operators MUST mount
+# a real config.json here, e.g.:
+#   docker run -v $PWD/my-config.json:/etc/evgrpc/config.json:ro …
+# No env vars are read at startup in v2 — all configuration is in
+# config.json.
+RUN mkdir -p /etc/evgrpc
 EXPOSE 50051
 
 ENTRYPOINT ["/app/evgrpc_server"]
+CMD ["--config", "/etc/evgrpc/config.json"]
