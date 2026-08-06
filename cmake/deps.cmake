@@ -65,11 +65,6 @@ FetchContent_Declare(
   GIT_TAG        7.9.2
   GIT_SHALLOW    TRUE
 )
-# nlohmann_json: provided by system package nlohmann-json3-dev (apt).
-# We avoid FetchContent here because testcontainers-cpp does
-# `find_package(nlohmann_json REQUIRED)` and would fail without an
-# installed nlohmann_jsonConfig.cmake; system package provides it.
-# jwt-cpp and testcontainers-cpp both pick it up via find_package.
 FetchContent_Declare(
   spdlog
   GIT_REPOSITORY https://gh-proxy.com/https://github.com/gabime/spdlog.git
@@ -176,9 +171,6 @@ if(EVGRPC_WITH_TESTCONTAINERS)
   FetchContent_MakeAvailable(testcontainers_cpp)
 endif()
 
-# nlohmann_json — system package (nlohmann-json3-dev).
-find_package(nlohmann_json 3.11.0 REQUIRED)
-
 # gRPC's CMake config defaults to using its bundled third_party/protobuf for
 # protobuf headers (gRPC_PROTOBUF_PROVIDER=module). We didn't fetch that
 # submodule, so the include dirs end up empty and grpc_cpp_plugin fails to
@@ -199,5 +191,15 @@ endif()
 set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(curl)
+
+# nlohmann_json: provided by system package nlohmann-json3-dev (apt).
+# Promoted to top-level dep so src/config/config_loader.cc (config.json
+# parsing, see docs/superpowers/plans/2026-08-06-config-json-migration.md
+# Task 2) can include <nlohmann/json.hpp> unconditionally. We avoid
+# FetchContent here because testcontainers-cpp does
+# `find_package(nlohmann_json REQUIRED)` and would fail without an
+# installed nlohmann_jsonConfig.cmake; system package provides it.
+# jwt-cpp and testcontainers-cpp both pick it up via find_package.
+find_package(nlohmann_json 3.11.0 REQUIRED)
 
 find_package(Threads REQUIRED)
