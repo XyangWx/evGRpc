@@ -3,6 +3,7 @@
 #include <pqxx/pqxx>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -22,8 +23,9 @@ grpc::Status WeatherServiceImpl::CreateWeather(
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
     auto id = NewUuid();
-    tx.exec_params(
+    db::Exec(tx,
         "INSERT INTO weather (Id, Name) VALUES ($1, $2)",
+        "WeatherService.CreateWeather",
         id, req->name());
     tx.commit();
 
@@ -57,9 +59,10 @@ grpc::Status WeatherServiceImpl::SearchWeather(
     // when the user has typed nothing.
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, Name FROM weather WHERE Name ^@ $1 "
         "ORDER BY Name LIMIT $2",
+        "WeatherService.SearchWeather",
         req->prefix(), limit);
 
     for (const auto& row : result) {
