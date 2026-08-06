@@ -322,6 +322,8 @@ The interceptor must **fail-closed** — any error in token parsing, key lookup,
 
 ### 5.4 Configuration
 
+> **JWKS URL is auto-derived from `oauth.issuer_url` via OIDC discovery at startup (see `2026-08-06-config-json-migration.md` §3.1).** `oauth.jwks_url` is no longer user-configurable.
+
 | Env var | Purpose | Required |
 |---|---|---|
 | `OAUTH_ISSUER_URL` | Expected JWT `iss` claim | yes |
@@ -468,6 +470,8 @@ Multi-stage `Dockerfile`:
 - **Stage 2 (`runtime`)**: minimal base with `libpq5` + `libgrpc++1` + runtime libs. Copies built binary. Sets `ENTRYPOINT`.
 
 ### Runtime Config
+
+> **Superseded by [`2026-08-06-config-json-migration.md`](./2026-08-06-config-json-migration.md) §2 — config.json is the only config source in v2.** The env-var table below is retained for historical reference only.
 
 Environment variables consumed at startup:
 

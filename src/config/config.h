@@ -1,18 +1,27 @@
 #pragma once
+#include "config/config_loader.h"
 #include <string>
-#include <stdexcept>
 
 namespace evgrpc {
 
-struct Config {
-    std::string database_url;
-    std::string oauth_issuer_url;
-    std::string oauth_audience;
-    std::string oauth_jwks_url;
-    int oauth_jwks_cache_ttl_seconds = 3600;
-    int grpc_port = 50051;
-
-    static Config Load();
+// Fully-resolved config (after OIDC discovery has populated jwks_url).
+// This is what main.cc threads through PgPool, JwksCache, JwtValidator,
+// log::Init, and ServerBuilder.
+struct RuntimeConfig {
+    DatabaseConfig database;
+    struct {
+        std::string issuer_url;
+        std::string jwks_url;     // populated by OIDC discovery
+        std::string audience;
+        int jwks_cache_ttl_seconds;
+    } oauth;
+    GrpcConfig grpc;
+    LogConfig log;
 };
+
+// Combined: LoadSchema(path) + DiscoverJwksUri(issuer_url) + assemble
+// RuntimeConfig. Throws std::runtime_error on any failure (file read,
+// JSON parse, schema validation, OIDC discovery HTTP/JSON/field).
+RuntimeConfig LoadConfig(const std::string& path);
 
 }  // namespace evgrpc
