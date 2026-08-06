@@ -3,6 +3,7 @@
 #include <pqxx/pqxx>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -25,8 +26,9 @@ grpc::Status SourceCategoryServiceImpl::CreateSourceCategory(
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
     auto id = NewUuid();
-    tx.exec_params(
+    db::Exec(tx,
         "INSERT INTO source_category (Id, Name) VALUES ($1, $2)",
+        "SourceCategoryService.CreateSourceCategory",
         id, req->name());
     tx.commit();
 
@@ -54,9 +56,10 @@ grpc::Status SourceCategoryServiceImpl::SearchSourceCategory(
 
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, Name FROM source_category WHERE Name ^@ $1 "
         "ORDER BY Name LIMIT $2",
+        "SourceCategoryService.SearchSourceCategory",
         req->prefix(), limit);
 
     for (const auto& row : result) {
