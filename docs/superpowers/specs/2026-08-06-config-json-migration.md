@@ -465,7 +465,7 @@ Committed to the repo as a dev/ops reference. Contents:
 
 | File | Change |
 |---|---|
-| `tests/unit/test_log.cc` | 6 places: `setenv("LOG_LEVEL", ...)` / `setenv("LOG_FILE", ...)` → build `LogConfig` literal and call `Init(cfg)`. The 2 test cases that exercise `LOG_FORMAT=json` warning behavior are deleted (feature removed). |
+| `tests/unit/test_log.cc` | 6 places: `setenv("LOG_LEVEL", ...)` / `setenv("LOG_FILE", ...)` → build `LogConfig` literal and call `Init(cfg)`. The `LOG_FORMAT=json` env var path had no test coverage in the current `test_log.cc` (verified by grep), so no tests are deleted — only mechanically rewritten. |
 | `scripts/smoke.sh` | All `export DATABASE_URL=...` / `export OAUTH_*=...` / `export LOG_*=...` removed. Replaced with: `cp config.example.json /tmp/evgrpc-smoke.json` + run `evgrpc --config /tmp/evgrpc-smoke.json`. |
 | `tests/integration/e2e_test.cc` | TestServer fixture passes `--config <test_config_path>` to the child process. |
 
@@ -478,7 +478,7 @@ The 5 `tests/unit/test_*_service.cc` files (vehicle / weather / source_category 
 ### 6.4 Test Count Target
 
 - Before this spec: 38 tests passing (per `evgrpc-progress.json` 2026-07-31).
-- After this spec: 38 (unchanged, no test deletions) + 38 (new) − 2 (deleted `LOG_FORMAT=json` tests) = **~74 tests passing**.
+- After this spec: 38 (existing, all mechanically rewritten to pass `LogConfig` instead of env vars) + 38 (new) − 0 (no test deletions; the removed `LOG_FORMAT=json` env path was untested) = **~76 tests passing**.
 
 ---
 
@@ -518,7 +518,7 @@ No new `FetchContent` calls. No new top-level deps. `cpp_httplib` is already in 
 14. `tests/unit/test_oidc_discovery.cc` — new.
 15. `tests/unit/test_db_exec.cc` — new.
 16. `tests/unit/test_args.cc` — new.
-17. `tests/unit/test_log.cc` — 6 setenv → LogConfig; delete 2 `LOG_FORMAT=json` tests.
+17. `tests/unit/test_log.cc` — 6 `setenv` → `LogConfig` literal (no test deletions; `LOG_FORMAT=json` path was untested).
 18. `scripts/smoke.sh` — env exports → `--config` flag.
 19. `Dockerfile` — `CMD ["evgrpc", "--config", "/etc/evgrpc/config.json"]`.
 20. `README.md` — replace env-var section with config.json section.
@@ -569,3 +569,4 @@ Same as §1 "Out of Scope".
 | Date | Author | Change |
 |---|---|---|
 | 2026-08-06 | (brainstorming session) | Initial draft |
+| 2026-08-06 | (self-review) | Fix test-count math: `LOG_FORMAT=json` had no test coverage, so 0 deletions (not 2). |
