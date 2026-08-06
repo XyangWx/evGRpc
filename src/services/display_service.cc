@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "services/charger/charger_type.h"
 #include "util/rpc_scope.h"
 
@@ -53,7 +54,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
     pqxx::nontransaction tx(*conn);
     auto start_ts = MaybeTimestamp(req->start_time());
     auto end_ts = MaybeTimestamp(req->end_time());
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         // Two CTEs: charging aggregates, consumption aggregates (for
         // total km). Combined in one SELECT to save a round-trip.
         "WITH c AS ("
@@ -71,6 +72,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
         "    AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3)"
         ") "
         "SELECT c.total_cost, c.total_kwh, k.total_km FROM c, k",
+        "DisplayService.GetVehicleCostSummary",
         req->vehicle_id(), start_ts, end_ts);
 
     if (result.empty()) {
@@ -153,7 +155,7 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND VehicleId = $3"))
         + "), 0)::DOUBLE PRECISION AS total_km";
-    auto result = tx.exec_params(sql, p);
+    auto result = db::Exec(tx, sql, "DisplayService.GetMonthlyReport", p);
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
       scope.set_status(s);
@@ -217,7 +219,7 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND VehicleId = $2"))
         + "), 0)::DOUBLE PRECISION AS total_km";
-    auto result = tx.exec_params(sql, p);
+    auto result = db::Exec(tx, sql, "DisplayService.GetAnnualReport", p);
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
       scope.set_status(s);
@@ -256,7 +258,7 @@ grpc::Status DisplayServiceImpl::GetCostByChargerType(
     // GROUP BY ChargerType. CAST to CHARGER_TYPE_ENUM is a no-op
     // identity (it's already typed), but the SUMs need DOUBLE PRECISION
     // casts so the proto doubles resolve.
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT ChargerType, "
         "       COALESCE(SUM(Cost), 0)::DOUBLE PRECISION AS total_cost, "
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
@@ -266,6 +268,7 @@ grpc::Status DisplayServiceImpl::GetCostByChargerType(
         "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
         "GROUP BY ChargerType "
         "ORDER BY ChargerType",
+        "DisplayService.GetCostByChargerType",
         // Optional vehicle_id: bind std::nullopt when unset so SQL
         // gets NULL and the `($1::TEXT IS NULL OR VehicleId = $1)`
         // predicate is satisfied (matches all vehicles).
@@ -312,7 +315,7 @@ grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
 
     // JOIN charging ⨝ source_category to get the category name.
     // GROUP BY source_category so each row = one breakdown.
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT c.SourceCategoryId, sc.Name AS SourceCategoryName, "
         "       COALESCE(SUM(c.Cost), 0)::DOUBLE PRECISION AS total_cost, "
         "       COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
@@ -323,6 +326,7 @@ grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
         "  AND ($3::TIMESTAMP IS NULL OR c.StartTime <= $3) "
         "GROUP BY c.SourceCategoryId, sc.Name "
         "ORDER BY total_cost DESC",
+        "DisplayService.GetCostBySourceCategory",
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
         start_ts,
@@ -373,7 +377,7 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
     auto end_ts = MaybeTimestamp(req->end_time());
 
     // Per-vehicle totals from consumption.
-    auto km_rows = tx.exec_params(
+    auto km_rows = db::Exec(tx,
         "SELECT VehicleId, "
         "       COALESCE(SUM(end_mileage - begin_mileage), 0)::DOUBLE PRECISION AS total_km "
         "FROM consumption "
@@ -381,12 +385,13 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "  AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
         "  AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
         "GROUP BY VehicleId",
+        "DisplayService.GetConsumptionEfficiency",
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
         start_ts, end_ts);
 
     // Per-vehicle totals from charging.
-    auto kwh_rows = tx.exec_params(
+    auto kwh_rows = db::Exec(tx,
         "SELECT VehicleId, "
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "FROM charging "
@@ -394,6 +399,7 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
         "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
         "GROUP BY VehicleId",
+        "DisplayService.GetConsumptionEfficiency",
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
         start_ts, end_ts);
@@ -452,7 +458,7 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
     // (km actually driven between consumption events).
     // Accuracy ratio = actual / dashboard — values < 1 mean the car
     // over-reported its range; values > 1 mean it under-reported.
-    auto rows = tx.exec_params(
+    auto rows = db::Exec(tx,
         "SELECT d.VehicleId, "
         "       COALESCE(d.dashboard_range, 0)::DOUBLE PRECISION AS dashboard, "
         "       COALESCE(m.actual_mileage, 0)::DOUBLE PRECISION AS actual "
@@ -471,6 +477,7 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
         "    AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
         "  GROUP BY VehicleId"
         ") m ON d.VehicleId = m.VehicleId",
+        "DisplayService.GetRangeAccuracy",
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
         start_ts, end_ts);
@@ -526,7 +533,7 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
     //
     // Then bucket by avg_temp (5 hard-coded buckets per the proto
     // comment) and aggregate.
-    auto rows = tx.exec_params(
+    auto rows = db::Exec(tx,
         "WITH per_event AS ("
         "  SELECT "
         "    ((c.HighestTemperature + c.LowestTemperature) / 2.0)::DOUBLE PRECISION AS avg_temp, "
@@ -558,6 +565,7 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
         "FROM per_event "
         "GROUP BY label "
         "ORDER BY MIN(avg_temp)",
+        "DisplayService.GetTemperatureConsumptionCorrelation",
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
         start_ts, end_ts);
