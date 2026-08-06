@@ -4,6 +4,7 @@
 #include <pqxx/pqxx>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -58,9 +59,10 @@ grpc::Status VehicleServiceImpl::CreateVehicle(
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
     auto id = NewUuid();
-    tx.exec_params(
+    db::Exec(tx,
         "INSERT INTO vehicle (Id, Brand, CalibratedRange, BatteryCapacity, "
         "PurchaseDate, LicensePlate) VALUES ($1, $2, $3, $4, $5::date, $6)",
+        "VehicleService.CreateVehicle",
         id,
         req->brand(),
         req->calibrated_range_km(),
@@ -93,9 +95,10 @@ grpc::Status VehicleServiceImpl::GetVehicle(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, Brand, CalibratedRange, BatteryCapacity, "
         "PurchaseDate::text, LicensePlate FROM vehicle WHERE Id = $1",
+        "VehicleService.GetVehicle",
         req->id());
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "vehicle not found");
@@ -121,11 +124,12 @@ grpc::Status VehicleServiceImpl::UpdateVehicle(
   try {
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "UPDATE vehicle SET Brand=$2, CalibratedRange=$3, BatteryCapacity=$4, "
         "PurchaseDate=$5::date, LicensePlate=$6 WHERE Id=$1 "
         "RETURNING Id, Brand, CalibratedRange, BatteryCapacity, "
         "PurchaseDate::text, LicensePlate",
+        "VehicleService.UpdateVehicle",
         req->id(),
         req->brand(),
         req->calibrated_range_km(),
@@ -158,8 +162,10 @@ grpc::Status VehicleServiceImpl::DeleteVehicle(
   try {
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
-    auto result = tx.exec_params(
-        "DELETE FROM vehicle WHERE Id=$1", req->id());
+    auto result = db::Exec(tx,
+        "DELETE FROM vehicle WHERE Id=$1",
+        "VehicleService.DeleteVehicle",
+        req->id());
     if (result.affected_rows() == 0) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "vehicle not found");
       scope.set_status(s);
@@ -193,10 +199,11 @@ grpc::Status VehicleServiceImpl::ListVehicles(
     // a separate COUNT(*) round-trip.
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, Brand, CalibratedRange, BatteryCapacity, "
         "PurchaseDate::text, LicensePlate FROM vehicle "
         "ORDER BY PurchaseDate DESC, Id LIMIT $1 OFFSET $2",
+        "VehicleService.ListVehicles",
         page_size + 1, offset);
     bool has_more = result.size() > static_cast<size_t>(page_size);
     size_t emit = has_more ? static_cast<size_t>(page_size) : result.size();
