@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
-#include <cstdlib>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include "config/config_loader.h"
 #include "log/log.h"
 #include <spdlog/spdlog.h>
 
@@ -14,24 +15,30 @@ std::string ReadAll(const std::string& path) {
   return ss.str();
 }
 
+evgrpc::LogConfig DefaultLogConfig() {
+  evgrpc::LogConfig c;
+  c.level = "info";
+  c.file = "";
+  c.max_size_mb = 100;
+  c.max_files = 7;
+  return c;
+}
+
 }  // namespace
 
-TEST(LogInitTest, IdempotentWhenEnvUnchanged) {
-  // Init() may be called multiple times safely — second call replaces
-  // the registry but doesn't crash.
-  evgrpc::log::Init();
-  evgrpc::log::Init();
+TEST(LogInitTest, IdempotentWhenUnchanged) {
+  evgrpc::log::Init(DefaultLogConfig());
+  evgrpc::log::Init(DefaultLogConfig());
   SUCCEED();
 }
 
 TEST(LogInitTest, RespectsLogLevelDebug) {
-  setenv("LOG_LEVEL", "debug", 1);
+  auto cfg = DefaultLogConfig();
+  cfg.level = "debug";
   const std::string path = "/tmp/evgrpc_test_log_level_debug.log";
-  setenv("LOG_FILE", path.c_str(), 1);
-  // Clear any stale file from a previous run so we can assert content
-  // deterministically.
+  cfg.file = path;
   std::remove(path.c_str());
-  evgrpc::log::Init();
+  evgrpc::log::Init(cfg);
 
   auto auth = evgrpc::log::Get("auth");
   auth->debug("debug-visible");
@@ -45,11 +52,12 @@ TEST(LogInitTest, RespectsLogLevelDebug) {
 }
 
 TEST(LogInitTest, StderrSinkOnlyReceivesErrorOrAbove) {
-  setenv("LOG_LEVEL", "trace", 1);
+  auto cfg = DefaultLogConfig();
+  cfg.level = "trace";
   const std::string path = "/tmp/evgrpc_test_log_stderr_filter.log";
-  setenv("LOG_FILE", path.c_str(), 1);
+  cfg.file = path;
   std::remove(path.c_str());
-  evgrpc::log::Init();
+  evgrpc::log::Init(cfg);
 
   auto l = evgrpc::log::Get("server");
   l->info("info-to-stdout");
@@ -58,18 +66,13 @@ TEST(LogInitTest, StderrSinkOnlyReceivesErrorOrAbove) {
   spdlog::apply_all([](std::shared_ptr<spdlog::logger> l) { l->flush(); });
 
   auto content = ReadAll(path);
-  // File sink receives everything ≥ LOG_LEVEL (trace+):
   EXPECT_NE(content.find("info-to-stdout"), std::string::npos);
   EXPECT_NE(content.find("error-to-stderr-and-file"), std::string::npos);
   EXPECT_NE(content.find("critical-to-stderr-and-file"), std::string::npos);
-  // (The stderr-only filter — `err` and above only — is set
-  // programmatically in Init(). We can't capture stderr from inside a
-  // gtest process; manual code review confirms `stderr_sink->set_level(
-  // spdlog::level::err)` in log.cc.)
 }
 
 TEST(LogInitTest, GetReturnsSameLoggerForSameName) {
-  evgrpc::log::Init();
+  evgrpc::log::Init(DefaultLogConfig());
   auto a1 = evgrpc::log::Get("auth");
   auto a2 = evgrpc::log::Get("auth");
   EXPECT_EQ(a1.get(), a2.get());
@@ -79,11 +82,18 @@ TEST(LogInitTest, GetReturnsSameLoggerForSameName) {
 }
 
 TEST(LogInitTest, SetLevelAppliesToAllLoggers) {
-  setenv("LOG_LEVEL", "info", 1);
-  evgrpc::log::Init();
+  auto cfg = DefaultLogConfig();
+  cfg.level = "info";
+  evgrpc::log::Init(cfg);
   auto auth = evgrpc::log::Get("auth");
   EXPECT_EQ(auth->level(), spdlog::level::info);
 
   evgrpc::log::SetLevel(spdlog::level::debug);
   EXPECT_EQ(auth->level(), spdlog::level::debug);
+}
+
+TEST(LogInitTest, ThrowsOnUnwritableLogFileParent) {
+  auto cfg = DefaultLogConfig();
+  cfg.file = "/nonexistent/dir/that/does/not/exist/x.log";
+  EXPECT_THROW(evgrpc::log::Init(cfg), std::runtime_error);
 }

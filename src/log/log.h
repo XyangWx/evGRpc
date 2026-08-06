@@ -1,41 +1,34 @@
 #pragma once
+#include "config/config_loader.h"  // for LogConfig
 #include <memory>
 #include <string>
 #include <spdlog/spdlog.h>
 
 namespace evgrpc::log {
 
-// Initialize the global logging system. Call once at startup, before any
-// other code logs. Safe to call multiple times — each call clears and
-// re-creates the registry from current env vars (intended for tests; in
-// production `main.cc` calls it exactly once).
-//
-// Env vars (read at every Init()):
-//   LOG_LEVEL              info|trace|debug|warn|error|critical  (default: info)
-//   LOG_FORMAT             text|json                              (default: text;
-//                                                              `json` rejected w/ warn)
-//   LOG_FILE               /path/to/file                          (default: empty;
-//                                                              empty = no file sink)
-//   LOG_FILE_MAX_SIZE_MB   int                                   (default: 100)
-//   LOG_FILE_MAX_FILES     int                                   (default: 7)
+// Initialize the global logging system from a LogConfig. Call once at
+// startup, before any other code logs. Safe to call multiple times —
+// each call clears and re-creates the registry (intended for tests;
+// in production `main.cc` calls it exactly once).
 //
 // Sinks:
-//   - stdout color sink: receives ≥ LOG_LEVEL (auto-color if TTY)
-//   - stderr color sink: receives ≥ `err` (error|critical only)
-//   - rotating file sink: receives ≥ LOG_LEVEL (only if LOG_FILE set);
-//                         rotates at LOG_FILE_MAX_SIZE_MB MB, keeps
-//                         LOG_FILE_MAX_FILES old files
+//   - stdout color sink: receives >= cfg.level (auto-color if TTY)
+//   - stderr color sink: receives >= err (error|critical only)
+//   - rotating file sink: receives >= cfg.level (only if cfg.file set);
+//                         rotates at cfg.max_size_mb MB, keeps
+//                         cfg.max_files old files
 //
-// Named loggers (all initialized to LOG_LEVEL):
-//   auth, service, db, jwks, server  — see spec §5.6 for ownership.
-void Init();
+// Throws std::runtime_error if cfg.file is non-empty and its parent
+// directory does not exist or is not writable (fail-fast).
+//
+// Named loggers (all initialized to cfg.level):
+//   auth, service, db, jwks, server.
+void Init(const evgrpc::LogConfig& cfg);
 
-// Look up a named logger. Lazy-creates if not registered (returns a fresh
-// logger with default level — silent fallback for tests; production code
-// should rely on Init() having been called).
+// Look up a named logger. Lazy-creates if not registered.
 std::shared_ptr<spdlog::logger> Get(const std::string& name);
 
-// Re-apply level at runtime (e.g., from a SIGHUP handler in Task 15).
+// Re-apply level at runtime.
 void SetLevel(spdlog::level::level_enum level);
 
 }  // namespace evgrpc::log

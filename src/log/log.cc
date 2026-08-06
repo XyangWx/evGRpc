@@ -1,8 +1,10 @@
 #include "log/log.h"
 
-#include <cstdlib>
 #include <iostream>
 #include <vector>
+#include <filesystem>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <spdlog/sinks/ansicolor_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 
@@ -10,42 +12,33 @@ namespace evgrpc::log {
 
 namespace {
 
-spdlog::level::level_enum ParseLevel(const char* s) {
+spdlog::level::level_enum ParseLevel(const std::string& s) {
   using namespace spdlog::level;
-  if (!s) return info;
-  std::string str(s);
-  if (str == "trace") return trace;
-  if (str == "debug") return debug;
-  if (str == "info")  return info;
-  if (str == "warn" || str == "warning") return warn;
-  if (str == "error" || str == "err") return err;
-  if (str == "critical" || str == "crit") return critical;
+  if (s == "trace") return trace;
+  if (s == "debug") return debug;
+  if (s == "info")  return info;
+  if (s == "warn" || s == "warning") return warn;
+  if (s == "error" || s == "err") return err;
+  if (s == "critical" || s == "crit") return critical;
   return info;
 }
 
-const char* GetEnvOr(const char* var, const char* fallback) {
-  const char* v = std::getenv(var);
-  return (v && *v) ? v : fallback;
-}
-
-// Text pattern shared by all sinks. The `%^...%$` markers enable color
-// only when the destination is a TTY (spdlog's color sinks handle this
-// automatically — the markers are no-ops when not a TTY).
 constexpr char kTextPattern[] =
     "[%Y-%m-%d %H:%M:%S.%e %z] [%^%l%$] [%n] %v";
 
+bool IsWritableDir(const std::string& path) {
+  struct stat st;
+  if (stat(path.c_str(), &st) != 0) return false;
+  if (!S_ISDIR(st.st_mode)) return false;
+  return access(path.c_str(), W_OK) == 0;
+}
+
 }  // namespace
 
-void Init() {
-  spdlog::drop_all();  // idempotent re-init: clear and rebuild
+void Init(const evgrpc::LogConfig& cfg) {
+  spdlog::drop_all();
 
-  auto level = ParseLevel(GetEnvOr("LOG_LEVEL", "info"));
-  bool want_json = std::string(GetEnvOr("LOG_FORMAT", "text")) == "json";
-  if (want_json) {
-    std::cerr << "[evgrpc-log] LOG_FORMAT=json is reserved for v2; "
-              << "falling back to text" << std::endl;
-    want_json = false;
-  }
+  auto level = ParseLevel(cfg.level);
 
   auto stdout_sink =
       std::make_shared<spdlog::sinks::ansicolor_stdout_sink_st>();
@@ -59,20 +52,20 @@ void Init() {
 
   std::vector<spdlog::sink_ptr> sinks{stdout_sink, stderr_sink};
 
-  const char* log_file = GetEnvOr("LOG_FILE", "");
-  if (*log_file) {
-    int max_size_mb = std::atoi(GetEnvOr("LOG_FILE_MAX_SIZE_MB", "100"));
-    int max_files = std::atoi(GetEnvOr("LOG_FILE_MAX_FILES", "7"));
+  if (!cfg.file.empty()) {
+    std::filesystem::path p(cfg.file);
+    auto parent = p.parent_path();
+    if (parent.empty()) parent = ".";
+    if (!IsWritableDir(parent.string())) {
+      throw std::runtime_error(
+          "log.file: parent directory does not exist or is not writable: " +
+          parent.string());
+    }
     auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
-        log_file,
-        /*max_size=*/static_cast<size_t>(max_size_mb) * 1024 * 1024,
-        /*max_files=*/max_files);
+        cfg.file,
+        static_cast<size_t>(cfg.max_size_mb) * 1024 * 1024,
+        cfg.max_files);
     file_sink->set_level(level);
-    // Note: rotating_file_sink_st doesn't expose flush_on() at the
-    // sink level (per spdlog v1.13). Flush-on-error is configured on
-    // each logger below (logger->flush_on(err)) — that flushes ALL
-    // attached sinks including this file sink, so error events make it
-    // to disk before the buffer decides to flush on rotation.
     file_sink->set_pattern(kTextPattern);
     sinks.push_back(file_sink);
   }
@@ -81,11 +74,6 @@ void Init() {
     auto logger = std::make_shared<spdlog::logger>(
         name, sinks.begin(), sinks.end());
     logger->set_level(level);
-    // Flush on every error+ so auth-rejection / DB-fail events
-    // reach the file sink before the buffer decides to flush on
-    // rotation. Critical for forensics — if the server crashes
-    // mid-request, the "auth failed" line is already on disk
-    // instead of lost in a 100MB buffer.
     logger->flush_on(spdlog::level::err);
     spdlog::register_logger(logger);
   }
@@ -94,9 +82,6 @@ void Init() {
 std::shared_ptr<spdlog::logger> Get(const std::string& name) {
   auto existing = spdlog::get(name);
   if (existing) return existing;
-  // Fallback: tests may call Get() before Init(). Build a fresh logger
-  // so they don't NPE. Production code calls Init() at startup so this
-  // path is unreachable.
   auto logger = std::make_shared<spdlog::logger>(name);
   spdlog::register_logger(logger);
   return logger;
