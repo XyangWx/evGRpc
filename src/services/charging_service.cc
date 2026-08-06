@@ -5,6 +5,7 @@
 #include <string>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
+#include "db/exec.h"
 #include "log/log.h"
 #include "services/charger/charger_type.h"
 #include "util/rpc_scope.h"
@@ -160,19 +161,21 @@ grpc::Status ChargingServiceImpl::CreateCharging(
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
     auto params = ChargeParams(id, req);
-    tx.exec_params(
+    db::Exec(tx,
         "INSERT INTO charging (Id, VehicleId, StartTime, EndTime, "
         "StartPercent, EndPercent, StartMileage, EndMileage, "
         "KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, ChargerType, "
         "SourceCategoryId, Location, Remark) VALUES "
         "($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, "
         "$10, $11, $12, $13::charger_type_enum, $14, $15, $16)",
+        "ChargingService.CreateCharging",
         params);
-    auto inserted = tx.exec_params(
+    auto inserted = db::Exec(tx,
         "SELECT Id, VehicleId, StartTime::text, EndTime::text, "
         "StartPercent, EndPercent, StartMileage, EndMileage, "
         "KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, ChargerType, "
         "SourceCategoryId, Location, Remark FROM charging WHERE Id=$1",
+        "ChargingService.CreateCharging",
         id);
     if (inserted.empty()) {
       auto s = grpc::Status(grpc::StatusCode::INTERNAL, "INSERT returned no row");
@@ -202,11 +205,12 @@ grpc::Status ChargingServiceImpl::GetCharging(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "SELECT Id, VehicleId, StartTime::text, EndTime::text, "
         "StartPercent, EndPercent, StartMileage, EndMileage, "
         "KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, ChargerType, "
         "SourceCategoryId, Location, Remark FROM charging WHERE Id=$1",
+        "ChargingService.GetCharging",
         req->id());
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "charging not found");
@@ -279,7 +283,7 @@ grpc::Status ChargingServiceImpl::UpdateCharging(
     if (req->location().empty()) p.append(nullptr); else p.append(req->location());
     if (req->remark().empty())   p.append(nullptr); else p.append(req->remark());
     p.append(req->id());
-    auto result = tx.exec_params(
+    auto result = db::Exec(tx,
         "UPDATE charging SET VehicleId=$1, StartTime=$2::timestamptz, "
         "EndTime=$3::timestamptz, StartPercent=$4, EndPercent=$5, "
         "StartMileage=$6, EndMileage=$7, KwhCharged=$8, Cost=$9, "
@@ -290,6 +294,7 @@ grpc::Status ChargingServiceImpl::UpdateCharging(
         "StartPercent, EndPercent, StartMileage, EndMileage, "
         "KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, ChargerType, "
         "SourceCategoryId, Location, Remark",
+        "ChargingService.UpdateCharging",
         p);
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "charging not found");
@@ -318,8 +323,9 @@ grpc::Status ChargingServiceImpl::DeleteCharging(
   try {
     auto conn = pool_->acquire();
     pqxx::work tx(*conn);
-    auto result = tx.exec_params(
-        "DELETE FROM charging WHERE Id=$1", req->id());
+    auto result = db::Exec(tx,
+        "DELETE FROM charging WHERE Id=$1", "ChargingService.DeleteCharging",
+        req->id());
     if (result.affected_rows() == 0) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "charging not found");
       scope.set_status(s);
@@ -389,7 +395,7 @@ grpc::Status ChargingServiceImpl::ListChargings(
 
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto result = tx.exec_params(sql, p);
+    auto result = db::Exec(tx, sql, "ChargingService.ListChargings", p);
     bool has_more = result.size() > static_cast<size_t>(page_size);
     size_t emit = has_more ? static_cast<size_t>(page_size) : result.size();
     for (size_t i = 0; i < emit; ++i) {
