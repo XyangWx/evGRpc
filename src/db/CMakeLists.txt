@@ -1,4 +1,4 @@
-add_library(evgrpc_db pool.cc error.cc)
+add_library(evgrpc_db pool.cc error.cc exec.cc)
 # libpqxx's CMakeLists adds `libpqxx::pqxx` as an ALIAS for target `pqxx`,
 # then exports it under the `libpqxx::` namespace. The plan/brief wrote
 # `pqxx::pqxx` which doesn't match what libpqxx 7.9.2 actually exposes.

@@ -5,6 +5,7 @@ add_executable(evgrpc_tests
   test_main.cc
   unit/test_config_loader.cc
   unit/test_config_runtime.cc
+  unit/test_db_exec.cc
   unit/test_pool.cc
   unit/test_error.cc
   unit/test_jwt_validator.cc
