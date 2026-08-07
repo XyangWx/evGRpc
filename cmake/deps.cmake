@@ -207,6 +207,19 @@ if(EXISTS "${_grpc_pb_cmake}")
     "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE $<TARGET_FILE:protobuf::protoc>)"
     "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE \"${CMAKE_BINARY_DIR}/_deps/protobuf-build/protoc\")"
     _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
+  # Don't let gRPC re-add_subdirectory protobuf-src a second time.
+  # FetchContent_MakeAvailable(protobuf) already did, and a second
+  # add_subdirectory on the same source fails CMP0002 ("cannot create
+  # target libprotobuf because another target with the same name already
+  # exists"). Wrap gRPC's add_subdirectory in `if(NOT TARGET libprotobuf)`
+  # so the protoc target is still picked up via add_subdirectory
+  # inheritance from the FetchContent side, but we don't double-include
+  # the source. Without this guard, --target all builds fail with CMP0002
+  # errors on libprotobuf / libprotoc / protoc / protobuf::protoc.
+  string(REPLACE
+    "    add_subdirectory(${PROTOBUF_ROOT_DIR} third_party/protobuf)"
+    "    if(NOT TARGET libprotobuf)\n      add_subdirectory(${PROTOBUF_ROOT_DIR} third_party/protobuf)\n    endif()"
+    _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
   file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_cmake_content}")
   message(STATUS
     "evGRpc workaround: patched grpc-src/cmake/protobuf.cmake to use "
@@ -216,6 +229,24 @@ endif()
 # Now do the rest of MakeAvailable, but grpc is already populated so
 # it will be a no-op for grpc (its add_subdirectory was just patched).
 FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
+
+# Wire gRPC's cmake/protobuf.cmake to use our FetchContent protobuf.
+# gRPC defaults PROTOBUF_ROOT_DIR to ${CMAKE_CURRENT_SOURCE_DIR}/third_party/protobuf
+# (= grpc-src/third_party/protobuf), which doesn't exist because we don't fetch
+# gRPC's protobuf submodule. When the EXISTS check fails, gRPC's protobuf.cmake
+# falls through to the `else()` warning branch and never sets
+# _gRPC_PROTOBUF_PROTOC_EXECUTABLE — leaving it empty for the gRPC internal
+# reflection/channelz/health.pb.cc codegen add_custom_command, which then runs
+# `cd ... && --grpc_out=...: not found`. Set PROTOBUF_ROOT_DIR before our manual
+# add_subdirectory(grpc-src); cmake's add_subdirectory inherits parent-scope
+# variables, so the value reaches gRPC's directory scope. cmake/protobuf.cmake
+# line 33 will then add_subdirectory(${protobuf_SOURCE_DIR}), creating the protoc
+# target, and our patch at line 45 (now with the FetchContent protoc binary's
+# absolute path) sets _gRPC_PROTOBUF_PROTOC_EXECUTABLE correctly.
+# Discovered: v0.2.2's sandbox build only built evgrpc_server and never reached
+# gRPC's internal reflection.codegen step. CLion `--target all` does, and failed
+## with `_gRPC_PROTOBUF_PROTOC_EXECUTABLE=` empty (cd dir && --grpc_out=...: not found).
+set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}")
 
 # evGRpc note: MakeAvailable is documented to do "populate if needed
 # then add_subdirectory", but both steps live in the same `if(NOT
