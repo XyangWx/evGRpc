@@ -141,6 +141,12 @@ set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
 set(gRPC_SSL_PROVIDER package CACHE STRING "" FORCE)
 set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+# Disable protobuf's vendored gtest build: it would create gmock/gmock_main
+# targets that collide with our separate googletest FetchContent (CMP0002
+# "add_library cannot create target 'gmock' because another target with
+# the same name already exists"). We provide our own gtest via the
+# googletest FetchContent below; we never run protobuf's own test suite.
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 # Disable install(EXPORT ...) rules for the FetchContent deps we never
 # install. Each library's CMakeLists runs `install(EXPORT ...)` at
 # CONFIGURE time, and fails with "absl_* not in any export set" if a
@@ -161,6 +167,54 @@ set(gRPC_INSTALL              OFF CACHE BOOL "" FORCE)
 # correctly above. Verified to silence the abseil-export storm that
 # started at Task 17 / 48c6d3384.
 set(CMAKE_SKIP_INSTALL_RULES   ON  CACHE BOOL "" FORCE)
+# Workaround for gRPC 1.62 protoc generator-expression bug:
+# gRPC/cmake/protobuf.cmake sets _gRPC_PROTOBUF_PROTOC_EXECUTABLE to
+#   $<TARGET_FILE:protoc>
+# which is a generator expression that does NOT expand to an absolute
+# path when the protoc target is declared inside a FetchContent
+# add_subdirectory boundary. The resulting add_custom_command ends up
+# with an empty COMMAND, and build.ninja has rules like:
+#   COMMAND = cd …/protos && --grpc_out=… --cpp_out=… --plugin=…
+# /bin/sh then errors with "1: --grpc_out=…: not found". Affected
+# rules: gRPC's *internal* proto codegen (reflection, channelz, health).
+#
+# We can't override the variable AFTER FetchContent_MakeAvailable:
+# add_custom_command captured the empty value at registration time.
+# We must patch gRPC's cmake/protobuf.cmake source BEFORE its
+# add_subdirectory runs.
+#
+# Strategy: use FetchContent_Populate (vs MakeAvailable) for grpc
+# first, patch its cmake/protobuf.cmake, then add_subdirectory manually
+# alongside MakeAvailable for the rest.
+
+FetchContent_GetProperties(grpc)
+if(NOT grpc_POPULATED)
+  FetchContent_Populate(grpc)
+endif()
+
+# Patch grpc-src/cmake/protobuf.cmake so the broken generator
+# expression is replaced with the FetchContent-built protoc's absolute
+# path (deterministic: ${CMAKE_BINARY_DIR}/_deps/protobuf-build/protoc).
+# Also patch the protobuf::protoc branch (line ~77) — same bug.
+set(_grpc_pb_cmake "${grpc_SOURCE_DIR}/cmake/protobuf.cmake")
+if(EXISTS "${_grpc_pb_cmake}")
+  file(READ "${_grpc_pb_cmake}" _grpc_pb_cmake_content)
+  string(REPLACE
+    "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE $<TARGET_FILE:protoc>)"
+    "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE \"${CMAKE_BINARY_DIR}/_deps/protobuf-build/protoc\")"
+    _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
+  string(REPLACE
+    "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE $<TARGET_FILE:protobuf::protoc>)"
+    "set(_gRPC_PROTOBUF_PROTOC_EXECUTABLE \"${CMAKE_BINARY_DIR}/_deps/protobuf-build/protoc\")"
+    _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
+  file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_cmake_content}")
+  message(STATUS
+    "evGRpc workaround: patched grpc-src/cmake/protobuf.cmake to use "
+    "absolute protoc path (gRPC 1.62 $<TARGET_FILE:protoc> bug)")
+endif()
+
+# Now do the rest of MakeAvailable, but grpc is already populated so
+# it will be a no-op for grpc (its add_subdirectory was just patched).
 FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
 
 # testcontainers_cpp is only needed by the integration test fixture.
