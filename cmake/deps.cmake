@@ -217,6 +217,39 @@ endif()
 # it will be a no-op for grpc (its add_subdirectory was just patched).
 FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
 
+# evGRpc note: MakeAvailable is documented to do "populate if needed
+# then add_subdirectory", but both steps live in the same `if(NOT
+# POPULATED)` block — see cmake/Modules/FetchContent.cmake. We
+# Populate'd grpc manually above to patch grpc-src/cmake/protobuf.cmake
+# before grpc's CMakeLists runs, but that means MakeAvailable will skip
+# the add_subdirectory for grpc too (POPULATED is already true). We must
+# manually add_subdirectory here, otherwise grpc_cpp_plugin (and grpc++,
+# etc.) never become visible in evGRpc's namespace, and
+# cmake/protoc.cmake's $<TARGET_FILE:grpc_cpp_plugin> errors out at
+# configure time with "No target grpc_cpp_plugin".
+if(NOT TARGET grpc_cpp_plugin)
+  add_subdirectory(${grpc_SOURCE_DIR} ${grpc_BINARY_DIR})
+endif()
+
+# Patch grpc-src/CMakeLists.txt:557 — same generator-expression bug for
+# grpc_cpp_plugin. gRPC sets `_gRPC_CPP_PLUGIN = $<TARGET_FILE:grpc_cpp_plugin>`
+# in its internal protobuf_generate_grpc() function, used to generate
+# reflection/channelz/health.pb.cc — same FetchContent boundary bug as
+# the protoc one. Replace with the absolute path where grpc's
+# add_executable(grpc_cpp_plugin) lands.
+set(_grpc_cmake "${grpc_SOURCE_DIR}/CMakeLists.txt")
+if(EXISTS "${_grpc_cmake}")
+  file(READ "${_grpc_cmake}" _grpc_cmake_content)
+  string(REPLACE
+    "set(_gRPC_CPP_PLUGIN \$<TARGET_FILE:grpc_cpp_plugin>)"
+    "set(_gRPC_CPP_PLUGIN \"${CMAKE_BINARY_DIR}/_deps/grpc-build/grpc_cpp_plugin\")"
+    _grpc_cmake_content "${_grpc_cmake_content}")
+  file(WRITE "${_grpc_cmake}" "${_grpc_cmake_content}")
+  message(STATUS
+    "evGRpc workaround: patched grpc-src/CMakeLists.txt to use "
+    "absolute grpc_cpp_plugin path (gRPC 1.62 \$<TARGET_FILE:...> bug)")
+endif()
+
 # testcontainers_cpp is only needed by the integration test fixture.
 # Production Docker images (and any other build that doesn't compile
 # tests/) can disable it to skip the Boost dependency.

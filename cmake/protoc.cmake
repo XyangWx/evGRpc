@@ -61,7 +61,7 @@ add_custom_command(
     --proto_path=${EVGRPC_WKT_PROTO_DIR}
     --cpp_out=${EVGRPC_PROTO_GEN_DIR}
     --grpc_out=${EVGRPC_PROTO_GEN_DIR}
-    --plugin=protoc-gen-grpc=$<TARGET_FILE:grpc_cpp_plugin>
+    --plugin=protoc-gen-grpc=${CMAKE_BINARY_DIR}/_deps/grpc-build/grpc_cpp_plugin
     ${EVGRPC_PROTO_FILES}
   DEPENDS ${EVGRPC_PROTO_FILES} protoc
   COMMENT "Generating protobuf + gRPC stubs (using FetchContent's protoc)"
@@ -86,3 +86,9 @@ add_custom_target(evgrpc_proto_gen ALL
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.pb.cc
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.grpc.pb.cc
 )
+# Hard-coded grpc_cpp_plugin path (see comment on line 64) loses the
+# implicit target dependency that $<TARGET_FILE:grpc_cpp_plugin>
+# would have given us. Without this, ninja runs the protoc command
+# before grpc_cpp_plugin has been compiled, and protoc fails with
+# "Plugin failed with status code 1".
+add_dependencies(evgrpc_proto_gen grpc_cpp_plugin)
