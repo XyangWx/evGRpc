@@ -184,6 +184,7 @@ FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_h
 # FetchContent_MakeAvailable(protobuf) above; the patch below wraps the
 # add_subdirectory in `if(NOT TARGET libprotobuf)` to avoid CMP0002 double-add).
 set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}")
+message(STATUS "DEBUG v0.2.8: PROTOBUF_ROOT_DIR set to '${PROTOBUF_ROOT_DIR}' in evGRpc scope")
 
 # Patch grpc-src/cmake/protobuf.cmake so the broken generator expressions
 # (line 45 $TARGET_FILE:protoc>, line 79 $TARGET_FILE:protobuf::protoc>)
@@ -214,6 +215,7 @@ if(EXISTS "${_grpc_pb_cmake}")
     endif()]==]
     _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
   file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_cmake_content}")
+  message(STATUS "DEBUG v0.2.8: wrote patched protobuf.cmake (PROTOBUF_ROOT_DIR='${PROTOBUF_ROOT_DIR}')")
   message(STATUS
     "evGRpc workaround: patched grpc-src/cmake/protobuf.cmake to use "
     "absolute protoc path (gRPC 1.62 $<TARGET_FILE:protoc> bug)")
