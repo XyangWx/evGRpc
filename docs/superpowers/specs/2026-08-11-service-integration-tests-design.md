@@ -28,7 +28,10 @@ have a safety net for the next refactor.
    run on its own. (a1's auth-failure branch is excluded; see §6.)
 4. **Critical integration points** beyond the service layer are also
    covered: `PgContainer` real-path, `db::Exec` log lines, `db::Pool`
-   acquire/release, config-loader env-var fallback.
+   acquire/release. (config-loader env-var fallback is already covered
+   by the existing `test_config_loader.cc`; we re-confirm via a single
+   assertion in `service_integration_main.cc` that `PgContainer`'s
+   `SetUp()` succeeds with `DATABASE_URL` set.)
 5. **Total runtime ≤ 60s** on the dev VM for the whole new binary.
 6. The suite slots into the existing `ctest` workflow with **one extra
    `coverage` target** that produces an HTML report.
@@ -61,7 +64,14 @@ ctest (evgrpc_integration_tests)
 The suite uses **one process, one PG, one in-process gRPC server** —
 launched once via a `::testing::Environment`. Each `TEST_F` issues a
 `TruncateAll()` (a new helper) before any stateful work, then runs a
-single RPC. This keeps the runtime under 60s for ~50 cases.
+single RPC. This keeps the runtime under 60s for ~75 cases. **Trade-off
+note (vs. the existing `pg_container.h` rationale):** the original
+`PgContainer` did not auto-truncate because the v1 smoke test only
+touched one row. With ~75 cases across 7 tables and parallel-style
+iteration, an explicit per-test `TRUNCATE` at the call site becomes
+unbearable copy-paste; centralizing in `SharedPgEnvironment::TruncateAll()`
+called from a `ServiceITBase` `SetUp()` keeps it explicit (the call is
+right there in every fixture) while removing the duplication.
 
 ### 4.1 Fixture mode: `no_auth`
 
@@ -69,8 +79,7 @@ single RPC. This keeps the runtime under 60s for ~50 cases.
 
 ```cpp
 struct Options {
-  bool no_auth = false;          // skip JWT signature/claim checks
-  bool jwks_disabled = false;    // don't start the JWKS HTTP server
+  bool no_auth = false;   // skip JWT validation; do not start JWKS HTTP server
   std::shared_ptr<PgContainer> pg;
 };
 class TestServer {
@@ -80,9 +89,12 @@ class TestServer {
 };
 ```
 
-When `no_auth=true`, the server constructs a `JwtValidator` with
-`bypass=true` (see §5.2). All RPCs succeed regardless of the bearer token
-(or absence thereof). Tests do **not** need to mint tokens.
+`no_auth=true` does two things together: (1) constructs a `JwtValidator`
+with `bypass=true` (see §5.2), and (2) skips the JWKS HTTP server
+entirely. The two flags are intentionally fused — there is no use case
+in this codebase for "JWT validation on but JWKS server off" or vice
+versa. When `no_auth=true` is set, RPCs succeed regardless of the bearer
+token (or absence thereof); tests do **not** need to mint tokens.
 
 When `no_auth=false`, behavior is identical to today (real JWT
 validation against the embedded JWKS server). The smoke test stays on
@@ -145,9 +157,13 @@ TEST_F(VehicleServiceIT, CreateVehicle_DuplicateLicensePlate_Conflict) {
 }
 ```
 
-Each `TEST_F` is self-contained: a `VehicleServiceIT` fixture (gtest
-`::testing::Test` derived) inherits a `channel()` accessor and the
-`TruncateAll()` helper from the global env.
+Each `TEST_F` is self-contained: a `ServiceITBase : public ::testing::Test`
+fixture provides `channel()` and a `SetUp()` that calls
+`SharedPgEnvironment::TruncateAll()`. Per-service test fixtures (e.g.
+`VehicleServiceIT : public ServiceITBase`) inherit this; the call to
+`TruncateAll()` is therefore **at the test site, not hidden in
+`SharedPgEnvironment`'s `SetUp()`** — it runs once per `TEST_F` and is
+visible in the test base's `SetUp()`.
 
 ## 5. Implementation Plan (overview only — see implementation plan for tasks)
 
@@ -203,7 +219,6 @@ This is a 4-line additive change. **No public-API break** (default is
 ```cpp
 struct TestServer::Options {
   bool no_auth = false;
-  bool jwks_disabled = false;
   std::shared_ptr<PgContainer> pg;
 };
 explicit TestServer(TestServer::Options opts);
@@ -213,10 +228,12 @@ explicit TestServer(TestServer::Options opts);
 
 When `no_auth=true`:
 - Construct `JwtValidator{ .issuer = iss_, .audience = aud_, .bypass = true }`.
-- **Skip** the JWKS HTTP server (combine with `jwks_disabled=true`).
-- The `BearerTokenCredentials()` method still works (returns a no-op
-  credentials plugin) so any test that happens to attach one doesn't
-  fail.
+- **Skip** the JWKS HTTP server (the two are fused — see §4.1).
+- The `BearerTokenCredentials()` method is unchanged on the wire: it
+  still signs a real RS256 JWT on every call. Server-side bypass simply
+  ignores the token. (A future optimization could short-circuit client
+  signing in `no_auth` mode to save ~ms/case, but is **not** in v1 — the
+  signing cost is well under the 0.8 s/case budget.)
 
 **`tests/fixtures/test_server.h`** — keep the existing `TestServer(PgContainer)` ctor as a thin delegator. Don't break the smoke test.
 
@@ -261,7 +278,11 @@ attribution drifts. The CMake build type stays whatever the dev sets
 
 ### 5.4 Coverage invocation
 
-New top-level target `scripts/coverage.sh` (or just docs):
+A shell script `scripts/coverage.sh` (new, executable, ~30 lines):
+
+- **Inputs:** none (reads from repo root).
+- **Outputs:** `cmake-build-cov/coverage.info`, `cmake-build-cov/coverage_html/index.html`, one-line `lcov` summary on stdout.
+- **Exit codes:** 0 = success (≥95% on `src/services/`); 1 = below threshold OR ctest OR lcov failed.
 
 ```bash
 cmake -S . -B cmake-build-cov -DEVGRPC_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
@@ -302,8 +323,15 @@ hit ≥95% on `src/services/*.cc`, every test case must exercise both
 - Each `Update*` RPC: 1 happy + 1 not-found + 1 invalid-argument.
 - Each `Delete*` RPC: 1 happy + 1 not-found.
 - Each `List*` RPC: 1 happy + 1 empty (no rows) + 1 filtered.
-- `DisplayService` analytics RPCs: 1 happy + 1 empty-result + 1 with
-  precondition (e.g. missing dependent data → FAILED_PRECONDITION).
+- Each `Search*` RPC (`SearchWeather`, `SearchSourceCategory` — 2 RPCs
+  total): 1 happy + 1 empty (zero matches) + 1 filtered (no results for
+  filter). Follows the `List*` pattern.
+- `DisplayService` aggregation RPCs (`GetVehicleCostSummary`,
+  `GetMonthlyReport`, `GetAnnualReport`): 1 happy + 1 empty-result,
+  which on these three RPCs returns `grpc::StatusCode::INTERNAL` with
+  message `"no aggregate row"` (verified: `src/services/display_service.cc`
+  lines 82, 160, 224). The 5 remaining `DisplayService` RPCs follow
+  the `Get*`/`List*` patterns.
 
 That brings the **target case count to ~60-75**. Realistic per-service
 breakdown is in §5.1.
@@ -340,8 +368,8 @@ backstop, not the primary isolation mechanism.
 | `NOT_FOUND` | Request a UUID that was never inserted |
 | `ALREADY_EXISTS` | Insert once, insert again with same unique field (license plate, source name, etc.) |
 | `INVALID_ARGUMENT` | Send empty required field, malformed UUID, etc. — depends on per-RPC validation |
-| `FAILED_PRECONDITION` | DisplayService RPCs that require ≥1 of N dependent records (e.g. GetMonthlyReport with no consumption rows) |
-| `INTERNAL` (DB error) | Skip — hard to trigger without mocking. Acceptable miss for v1. |
+| `INTERNAL` ("no aggregate row") | Call `GetVehicleCostSummary` / `GetMonthlyReport` / `GetAnnualReport` against an empty database — deterministic, no mocking needed |
+| `FAILED_PRECONDITION` | Not exercised in v1 — `src/services/*.cc` does not return it from any current branch. Future RPCs may add this. |
 
 ## 9. Risks and Mitigations
 
@@ -363,8 +391,10 @@ The implementation plan is **done** when:
 3. `lcov` summary reports `lines......: 95.0%` or higher on
    `src/services/`.
 4. The smoke test (`evgrpc_e2e_tests`) still passes unchanged.
-5. `grep -RIn 'bypass = true' src/` returns no production code (only
-   the test fixture `TestServer::Impl` ctor).
+5. `grep -RIn 'bypass = true' src/ tests/` returns **exactly one
+   match**, in `tests/fixtures/test_server.cc`'s `TestServer::Impl` ctor.
+   Zero matches would mean the bypass is dead code; ≥2 would mean
+   production code accidentally toggles auth off.
 6. A `scripts/coverage.sh` runs end-to-end and exits 0.
 
 ## 11. Out-of-Scope Follow-ups (next specs)
