@@ -168,9 +168,28 @@ set(gRPC_INSTALL              OFF CACHE BOOL "" FORCE)
 # started at Task 17 / 48c6d3384.
 set(CMAKE_SKIP_INSTALL_RULES   ON  CACHE BOOL "" FORCE)
 
-# Now do the rest of MakeAvailable, but grpc is already populated so
-# it will be a no-op for grpc (its add_subdirectory was just patched).
-FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
+# CRITICAL ORDER: pre-populate grpc BEFORE FetchContent_MakeAvailable so we
+# can patch grpc-src/cmake/protobuf.cmake BEFORE gRPC's own CMakeLists.txt
+# runs (inside MakeAvailable's add_subdirectory call).
+#
+# Background: FetchContent_MakeAvailable does populate + add_subdirectory
+# in one call. If we don't pre-populate, gRPC's CMakeLists.txt runs with the
+# UNPATCHED cmake/protobuf.cmake, captures the broken $<TARGET_FILE:protoc>
+# generator expression (or empty string after the if(EXISTS) check fails on
+# the missing grpc-src/third_party/protobuf submodule) into its
+# add_custom_command, and the patch runs too late. Reconfigure doesn't fix
+# it because ${grpc_ADDED_SUBDIRECTORY} cache var prevents MakeAvailable
+# from re-running add_subdirectory(grpc-src).
+#
+# v0.2.1 (5690ba736) introduced this pre-populate + patch + MakeAvailable
+# pattern. v0.2.7 (5e00a9af9) accidentally dropped the pre-populate when
+# refactoring the patch block, regressing reflection/channelz codegen on
+# `--target all`. Restoring it here.
+FetchContent_GetProperties(grpc)
+if(NOT grpc_POPULATED)
+  FetchContent_Populate(grpc)
+endif()
+
 # Wire gRPC's cmake/protobuf.cmake to use our FetchContent protobuf.
 # gRPC defaults PROTOBUF_ROOT_DIR to ${CMAKE_CURRENT_SOURCE_DIR}/third_party/protobuf
 # (= grpc-src/third_party/protobuf), which doesn't exist because we don't fetch
@@ -181,8 +200,14 @@ FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_h
 # Set PROTOBUF_ROOT_DIR to the FetchContent-populated protobuf-src path so
 # cmake/protobuf.cmake:33 add_subdirectory(${PROTOBUF_ROOT_DIR} third_party/protobuf)
 # succeeds (libprotobuf / libprotoc / protoc targets already exist via
-# FetchContent_MakeAvailable(protobuf) above; the patch below wraps the
+# FetchContent_MakeAvailable(protobuf) below; the patch wraps the
 # add_subdirectory in `if(NOT TARGET libprotobuf)` to avoid CMP0002 double-add).
+# Note: protobuf_SOURCE_DIR is available because FetchContent_GetProperties
+# ran during declare/declare-time properties load — but the protobuf target
+# (libprotobuf/libprotoc/protoc) only gets created after MakeAvailable below.
+# For now we set PROTOBUF_ROOT_DIR from the source dir alone; the patched
+# file evaluates ${PROTOBUF_ROOT_DIR} at gRPC's add_subdirectory time, where
+# the value (inherited from our scope) is what we set here.
 set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}")
 message(STATUS "DEBUG v0.2.8: PROTOBUF_ROOT_DIR set to '${PROTOBUF_ROOT_DIR}' in evGRpc scope")
 
@@ -191,7 +216,10 @@ message(STATUS "DEBUG v0.2.8: PROTOBUF_ROOT_DIR set to '${PROTOBUF_ROOT_DIR}' in
 # are replaced with the FetchContent-built protoc binary's absolute path,
 # AND wrap line 33's add_subdirectory in `if(NOT TARGET libprotobuf)` to
 # avoid CMP0002 ("cannot create target libprotobuf ... already exists")
-# since FetchContent_MakeAvailable(protobuf) above already added it.
+# since FetchContent_MakeAvailable(protobuf) below already adds it (via
+# the protobuf populate step inside MakeAvailable — at the moment gRPC's
+# CMakeLists.txt runs in the SAME MakeAvailable call, the protoc target
+# is fresh).
 set(_grpc_pb_cmake "${grpc_SOURCE_DIR}/cmake/protobuf.cmake")
 if(EXISTS "${_grpc_pb_cmake}")
   file(READ "${_grpc_pb_cmake}" _grpc_pb_cmake_content)
@@ -221,8 +249,16 @@ if(EXISTS "${_grpc_pb_cmake}")
     "absolute protoc path (gRPC 1.62 $<TARGET_FILE:protoc> bug)")
 endif()
 
+# Now MakeAvailable. grpc is already populated, so populate is skipped;
+# but ${grpc_ADDED_SUBDIRECTORY} is false, so add_subdirectory(grpc-src)
+# runs and sees our PATCHED cmake/protobuf.cmake. For the rest of the
+# deps (protobuf + others), populate + add_subdirectory both run.
+FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
+
 # cmake/protoc.cmake's $<TARGET_FILE:grpc_cpp_plugin> errors out at
-# configure time with "No target grpc_cpp_plugin".
+# configure time with "No target grpc_cpp_plugin". MakeAvailable's
+# add_subdirectory(grpc-src) above already created grpc_cpp_plugin, so
+# this gate should be FALSE (no-op). Kept as defensive fallback.
 if(NOT TARGET grpc_cpp_plugin)
   add_subdirectory(${grpc_SOURCE_DIR} ${grpc_BINARY_DIR})
 endif()
