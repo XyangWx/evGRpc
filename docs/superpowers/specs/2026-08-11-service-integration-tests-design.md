@@ -25,14 +25,17 @@ have a safety net for the next refactor.
 2. **Business-error branches** (NotFound, AlreadyExists, InvalidArgument,
    FailedPrecondition, …) reachable through the public API are covered.
 3. **`src/services/*.cc` ≥ 95% line coverage** when the new test binary is
-   run on its own. (a1's auth-failure branch is excluded; see §6.)
+   run on its own. (Auth-failure branches are excluded by design — see §6
+   for the trade-off rationale.)
 4. **Critical integration points** beyond the service layer are also
    covered: `PgContainer` real-path, `db::Exec` log lines, `db::Pool`
    acquire/release. (config-loader env-var fallback is already covered
    by the existing `test_config_loader.cc`; we re-confirm via a single
    assertion in `service_integration_main.cc` that `PgContainer`'s
    `SetUp()` succeeds with `DATABASE_URL` set.)
-5. **Total runtime ≤ 60s** on the dev VM for the whole new binary.
+5. **Total runtime ≤ 60s** target on the dev VM for the whole new
+   binary (~75 cases × ≤ 0.8 s/case, derived from 60s/75). Hard-fail
+   threshold in `scripts/coverage.sh` is `> 75s` (see §9).
 6. The suite slots into the existing `ctest` workflow with **one extra
    `coverage` target** that produces an HTML report.
 
@@ -55,7 +58,7 @@ ctest (evgrpc_integration_tests)
   └─ Global env (one process):
        ├─ PgContainer singleton (real PG @ 127.0.0.1:5432/evgrpc)
        ├─ TestServer singleton (in-process gRPC + JWKS HTTP + bearer creds)
-       │     - jwt_validator_.bypass = true   (a1)
+       │     - jwt_validator_.bypass = true
        └─ Truncate helper: TRUNCATE vehicle, charging, consumption,
             source_category, weather CASCADE  (per-test)
   └─ Per-test: shared gRPC channel, generated stub, RPC call, assert.
@@ -67,7 +70,8 @@ launched once via a `::testing::Environment`. Each `TEST_F` issues a
 single RPC. This keeps the runtime under 60s for ~75 cases. **Trade-off
 note (vs. the existing `pg_container.h` rationale):** the original
 `PgContainer` did not auto-truncate because the v1 smoke test only
-touched one row. With ~75 cases across 7 tables and parallel-style
+touched one row. With ~75 cases across 5 tables (`vehicle, charging,
+consumption, source_category, weather`) and parallel-style
 iteration, an explicit per-test `TRUNCATE` at the call site becomes
 unbearable copy-paste; centralizing in `SharedPgEnvironment::TruncateAll()`
 called from a `ServiceITBase` `SetUp()` keeps it explicit (the call is
@@ -123,7 +127,6 @@ the test site for visibility.
 
 ```cpp
 TEST_F(VehicleServiceIT, CreateVehicle_HappyPath) {
-  TruncateAll();
   auto stub = VehicleService::NewStub(channel());
   Vehicle v = MakeValidVehicle();   // local helper
   Vehicle resp;
@@ -136,7 +139,6 @@ TEST_F(VehicleServiceIT, CreateVehicle_HappyPath) {
 }
 
 TEST_F(VehicleServiceIT, GetVehicle_NotFound) {
-  TruncateAll();
   auto stub = VehicleService::NewStub(channel());
   GetVehicleRequest req;
   req.set_id("00000000-0000-0000-0000-000000000000");
@@ -147,7 +149,6 @@ TEST_F(VehicleServiceIT, GetVehicle_NotFound) {
 }
 
 TEST_F(VehicleServiceIT, CreateVehicle_DuplicateLicensePlate_Conflict) {
-  TruncateAll();
   auto stub = ...;
   Vehicle v1 = MakeValidVehicle("TESLA-1");
   Vehicle r1; stub->CreateVehicle(&ctx, v1, &r1);  // OK
@@ -310,9 +311,9 @@ header.
 | `src/auth/authenticate_rpc.h` (used by every service) | `_deps/*` (third-party) |
 | `tests/fixtures/pg_container.cc` (real-path) | `tests/*` (test code) |
 | `src/config/config_loader.cc` env-var path (already tested; just need to confirm) | `src/main.cc` (entry point, no logic) |
-| | `src/auth/jwt_validator.cc`, `src/auth/jwks_cache.cc`, `src/auth/oidc_discovery.cc` (a1 excludes; existing unit tests cover them) |
+| | `src/auth/jwt_validator.cc`, `src/auth/jwks_cache.cc`, `src/auth/oidc_discovery.cc` (excluded — see §6 auth-failure trade-off; existing unit tests cover them) |
 
-The a1 trade-off: `if (!a.status.ok())` inside every RPC method (the
+The auth-failure exclusion trade-off: `if (!a.status.ok())` inside every RPC method (the
 auth-failure early return) is **not** covered by this suite. To still
 hit ≥95% on `src/services/*.cc`, every test case must exercise both
 **the happy path and a business-error branch** of its target RPC. Concretely:
@@ -375,8 +376,8 @@ backstop, not the primary isolation mechanism.
 
 | Risk | Mitigation |
 |---|---|
-| Real PG schema drift between dev DB and `sql/001_initial.sql` | `TruncateAll()` runs `BEGIN;` and applies the SQL on first startup. Re-apply on mismatch in shared env SetUp. |
-| Test runtime creeps over 60s | `cases_per_second` budget enforced in `scripts/coverage.sh` — fail if total wall-clock > 90s. |
+| Real PG schema drift between dev DB and `sql/001_initial.sql` | `SharedPgEnvironment::SetUp()` applies `sql/*.sql` once on startup; `TruncateAll()` is pure-truncate and does not touch schema. |
+| Test runtime creeps over 75s | `scripts/coverage.sh` hard-fail threshold `> 75s` wall-clock (60s target + 25% slack; see §2 Goal 5). |
 | `VehicleServiceIT` parallel runs collide on shared PG | Single-threaded by default (gtest's default); `SharedPgEnvironment` is documented as not thread-safe. |
 | `bypass=true` accidentally shipped | `JwtValidator::bypass` is unit-tested in `test_jwt_validator.cc` for `false`-default; CI build asserts `grep -RIn 'bypass = true' src/` is empty. |
 | Generated proto stubs change and break stub API | New binary is added to the existing `evgrpc_proto` consumer list; same regenerate-on-proto-change rule. |
