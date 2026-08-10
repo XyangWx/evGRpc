@@ -1,5 +1,6 @@
 #include "config/config_loader.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -113,25 +114,71 @@ SchemaConfig LoadSchema(const std::string& path) {
     SchemaConfig cfg;
 
     // --- database ---
+    //
+    // Source priority: config.json > EVGRPC_DATABASE_URL env var.
+    // json wins when the field is present and non-empty; the env var
+    // only takes over when json omits the field, has an empty string,
+    // or has the wrong type (i.e. the json path didn't yield a usable
+    // value). Useful for road-testing without editing config.json on
+    // each machine — set EVGRPC_DATABASE_URL in the shell and run.
+    std::string db_url_env;
+    if (const char* env = std::getenv("EVGRPC_DATABASE_URL");
+        env != nullptr && *env != '\0') {
+        db_url_env = env;
+    }
+
     if (!j.contains("database")) {
-        errs.Add("database.url: missing required field");
+        // json omits the section entirely — fall back to env if present.
+        if (!db_url_env.empty()) {
+            cfg.database.url = db_url_env;
+        } else {
+            errs.Add("database.url: missing required field "
+                     "(set in config.json or via EVGRPC_DATABASE_URL env var)");
+        }
     } else {
         const auto& db = j["database"];
         if (!db.is_object()) {
             errs.Add("database: must be an object");
         } else {
             CheckUnknownKeys(db, kAllowedDatabaseKeys, "database", errs);
+
+            // Resolve candidate url from json: present + non-empty string.
+            bool json_has_url = false;
+            std::string json_url;
             if (!db.contains("url")) {
-                errs.Add("database.url: missing required field");
-            } else if (!db["url"].is_string() || db["url"].get<std::string>().empty()) {
-                errs.Add("database.url: must be a non-empty string");
+                // json missing url — defer to env below.
+            } else if (!db["url"].is_string()) {
+                errs.Add("database.url: must be a non-empty string "
+                         "(got non-string type)");
             } else {
-                auto s = db["url"].get<std::string>();
-                if (s.rfind("postgresql://", 0) != 0) {
-                    errs.Add("database.url: must start with \"postgresql://\" (got \"" + s + "\")");
+                json_url = db["url"].get<std::string>();
+                if (json_url.empty()) {
+                    // Empty string counts as "not provided" — defer to env.
                 } else {
-                    cfg.database.url = s;
+                    json_has_url = true;
                 }
+            }
+
+            if (json_has_url) {
+                // json wins. Validate the postgresql:// prefix.
+                if (json_url.rfind("postgresql://", 0) != 0) {
+                    errs.Add("database.url: must start with \"postgresql://\" "
+                             "(got \"" + json_url + "\")");
+                } else {
+                    cfg.database.url = json_url;
+                }
+            } else if (!db_url_env.empty()) {
+                // json absent/empty/invalid-type — fall back to env var.
+                if (db_url_env.rfind("postgresql://", 0) != 0) {
+                    errs.Add("database.url: must start with \"postgresql://\" "
+                             "(from EVGRPC_DATABASE_URL env var: \""
+                             + db_url_env + "\")");
+                } else {
+                    cfg.database.url = db_url_env;
+                }
+            } else {
+                errs.Add("database.url: missing required field "
+                         "(set in config.json or via EVGRPC_DATABASE_URL env var)");
             }
         }
     }
