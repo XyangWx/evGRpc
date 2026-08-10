@@ -197,29 +197,14 @@ endif()
 # its else() warning branch and never sets _gRPC_PROTOBUF_PROTOC_EXECUTABLE —
 # leaving it empty for the gRPC internal reflection/channelz/health.pb.cc
 # codegen add_custom_command, which then runs `cd ... && --grpc_out=...: not found`.
-# Set PROTOBUF_ROOT_DIR to the FetchContent-populated protobuf-src path so
-# cmake/protobuf.cmake:33 add_subdirectory(${PROTOBUF_ROOT_DIR} third_party/protobuf)
-# succeeds (libprotobuf / libprotoc / protoc targets already exist via
-# FetchContent_MakeAvailable(protobuf) below; the patch wraps the
-# add_subdirectory in `if(NOT TARGET libprotobuf)` to avoid CMP0002 double-add).
-# Note: protobuf_SOURCE_DIR is available because FetchContent_GetProperties
-# ran during declare/declare-time properties load — but the protobuf target
-# (libprotobuf/libprotoc/protoc) only gets created after MakeAvailable below.
-# For now we set PROTOBUF_ROOT_DIR from the source dir alone; the patched
-# file evaluates ${PROTOBUF_ROOT_DIR} at gRPC's add_subdirectory time, where
-# the value (inherited from our scope) is what we set here.
-set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}")
-message(STATUS "DEBUG v0.2.8: PROTOBUF_ROOT_DIR set to '${PROTOBUF_ROOT_DIR}' in evGRpc scope")
-
-# Patch grpc-src/cmake/protobuf.cmake so the broken generator expressions
-# (line 45 $TARGET_FILE:protoc>, line 79 $TARGET_FILE:protobuf::protoc>)
-# are replaced with the FetchContent-built protoc binary's absolute path,
-# AND wrap line 33's add_subdirectory in `if(NOT TARGET libprotobuf)` to
-# avoid CMP0002 ("cannot create target libprotobuf ... already exists")
-# since FetchContent_MakeAvailable(protobuf) below already adds it (via
-# the protobuf populate step inside MakeAvailable — at the moment gRPC's
-# CMakeLists.txt runs in the SAME MakeAvailable call, the protoc target
-# is fresh).
+#
+# PATCH ONLY the file content here. We don't set PROTOBUF_ROOT_DIR yet because
+# `protobuf_SOURCE_DIR` is empty until FetchContent_MakeAvailable populates
+# protobuf (it lives in PARENT_SCOPE of FetchContent_Populate, which only runs
+# inside MakeAvailable). The third string(REPLACE) uses [==[...]==] bracket
+# argument so ${PROTOBUF_ROOT_DIR} stays LITERAL in the patched file — we'll
+# set PROTOBUF_ROOT_DIR right before the manual add_subdirectory(grpc-src)
+# below (after MakeAvailable has populated protobuf).
 set(_grpc_pb_cmake "${grpc_SOURCE_DIR}/cmake/protobuf.cmake")
 if(EXISTS "${_grpc_pb_cmake}")
   file(READ "${_grpc_pb_cmake}" _grpc_pb_cmake_content)
@@ -243,22 +228,31 @@ if(EXISTS "${_grpc_pb_cmake}")
     endif()]==]
     _grpc_pb_cmake_content "${_grpc_pb_cmake_content}")
   file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_cmake_content}")
-  message(STATUS "DEBUG v0.2.8: wrote patched protobuf.cmake (PROTOBUF_ROOT_DIR='${PROTOBUF_ROOT_DIR}')")
+  message(STATUS "DEBUG v0.2.8: wrote patched protobuf.cmake (PROTOBUF_ROOT_DIR=pending-MakeAvailable)")
   message(STATUS
     "evGRpc workaround: patched grpc-src/cmake/protobuf.cmake to use "
     "absolute protoc path (gRPC 1.62 $<TARGET_FILE:protoc> bug)")
 endif()
 
-# Now MakeAvailable. grpc is already populated, so populate is skipped;
-# but ${grpc_ADDED_SUBDIRECTORY} is false, so add_subdirectory(grpc-src)
-# runs and sees our PATCHED cmake/protobuf.cmake. For the rest of the
-# deps (protobuf + others), populate + add_subdirectory both run.
+# Now MakeAvailable. grpc is already populated (POPULATED=TRUE from our
+# pre-populate above), so MakeAvailable's `if(NOT POPULATED)` block is
+# SKIPPED for grpc — no populate, no add_subdirectory. For protobuf and
+# the rest, populate + add_subdirectory both run, creating libprotobuf /
+# libprotoc / protoc targets in our scope.
 FetchContent_MakeAvailable(grpc protobuf libpqxx spdlog googletest jwt_cpp cpp_httplib)
 
-# cmake/protoc.cmake's $<TARGET_FILE:grpc_cpp_plugin> errors out at
-# configure time with "No target grpc_cpp_plugin". MakeAvailable's
-# add_subdirectory(grpc-src) above already created grpc_cpp_plugin, so
-# this gate should be FALSE (no-op). Kept as defensive fallback.
+# Refresh protobuf_SOURCE_DIR after MakeAvailable populated protobuf
+# (it's PARENT_SCOPE from FetchContent_Populate, only set now).
+FetchContent_GetProperties(protobuf)
+set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}")
+message(STATUS "DEBUG v0.2.8: PROTOBUF_ROOT_DIR set to '${PROTOBUF_ROOT_DIR}' in evGRpc scope")
+
+# Now manually add_subdirectory grpc-src. MakeAvailable skipped grpc's
+# add_subdirectory (POPULATED=TRUE), so grpc_cpp_plugin target doesn't
+# exist in our scope yet. The PATCHED grpc-src/cmake/protobuf.cmake
+# uses absolute path for _gRPC_PROTOBUF_PROTOC_EXECUTABLE, and the
+# patched line 33 (now wrapped in if(NOT TARGET libprotobuf)) is a
+# no-op because libprotobuf already exists from protobuf MakeAvailable.
 if(NOT TARGET grpc_cpp_plugin)
   add_subdirectory(${grpc_SOURCE_DIR} ${grpc_BINARY_DIR})
 endif()
