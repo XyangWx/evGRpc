@@ -84,7 +84,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
         "), k AS ("
         "  SELECT COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "  FROM consumption "
-        "  WHERE VehicleId = $1 "
+        "  WHERE VehicleId::text = $1 "
         "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
         "    AND ($3::TIMESTAMP IS NULL OR Start <= $3)"
         ") "
