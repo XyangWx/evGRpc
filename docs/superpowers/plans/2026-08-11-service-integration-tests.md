@@ -748,22 +748,38 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "fix(db): m
 
 ---
 
-### Task 8: Update `test_data` helper to also return `CreateVehicleRequest`
+### Task 8: Add `data::` Vehicle helpers + `FreshUuid` + `FreshLicensePlate` (Chunk 1 → Chunk 2 move)
 
 **Files:**
 - Modify: `tests/integration/test_data.h`
 - Modify: `tests/integration/test_data.cc`
 
-- [ ] **Step 1: Add `MakeValidCreateVehicleRequest()` declaration**
+**Scope:** This task was originally labeled "Update test_data helper to also return CreateVehicleRequest" but actually adds the **Chunk 1 Vehicle helpers that Task 5 mislabeled**. The helpers added here are used by all 13 VehicleService tests in Chunk 2 Tasks 9-13 + referenced by Chunks 3-6.
 
-In `tests/integration/test_data.h`, alongside `MakeValidVehicle`:
+- [ ] **Step 1: Add declarations**
+
+In `tests/integration/test_data.h`:
 
 ```cpp
-#include "evgrpc/vehicle.pb.h"  // CreateVehicleRequest
-// ...
+#include <grpcpp/grpcpp.h>
+#include <memory>
+#include <string>
+#include "evgrpc/vehicle.pb.h"
+
 namespace evgrpc::test::data {
 
+// UUID helper — thin wrapper around evgrpc::NewUuid() so test bodies
+// don't need to include util/uuid.h.
+std::string FreshUuid();
+
+// License plate generator (e.g. "T-1a2b3c4d").
+std::string FreshLicensePlate();
+
+// Build a fully-valid Vehicle proto for use as CreateVehicleRequest input
+// (CreateVehicleRequest == Vehicle fields minus id).
 Vehicle MakeValidVehicle(std::string plate = "");
+
+// Convert a Vehicle into a CreateVehicleRequest by dropping the id field.
 CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate = "");
 
 }
@@ -772,6 +788,25 @@ CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate = "");
 - [ ] **Step 2: Implement in `test_data.cc`**
 
 ```cpp
+std::string FreshUuid() { return evgrpc::NewUuid(); }
+
+std::string FreshLicensePlate() {
+  return "T-" + FreshUuid().substr(0, 8);
+}
+
+Vehicle MakeValidVehicle(std::string plate) {
+  Vehicle v;
+  v.set_id(FreshUuid());
+  v.set_brand("Tesla");
+  v.set_calibrated_range_km(500);
+  v.set_battery_capacity_kwh(75.0);
+  google::protobuf::Timestamp ts;
+  ts.set_seconds(1700000000);
+  *v.mutable_purchase_date() = ts;
+  v.set_license_plate(plate.empty() ? FreshLicensePlate() : plate);
+  return v;
+}
+
 CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
   CreateVehicleRequest req;
   req.set_brand("Tesla");
@@ -785,27 +820,35 @@ CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
 }
 ```
 
-- [ ] **Step 3: Add runtime smoke (add to `tests/integration/test_data.cc`, after the Chunk 1 `TEST(TestData, MakeValidVehicleIsValid)` smoke)**
+- [ ] **Step 3: Add runtime smoke**
 
 ```cpp
-TEST(TestData, MakeValidCreateVehicleRequestIsValid) {
+TEST_F(VehicleServiceIT, DataHelpers_MakeValidVehicleIsValid) {
+  const auto v = data::MakeValidVehicle();
+  EXPECT_EQ(v.id().size(), 36u);                       // UUID length
+  EXPECT_EQ(v.brand(), "Tesla");
+  EXPECT_EQ(v.license_plate().substr(0, 2), "T-");     // default prefix
+  EXPECT_GT(v.calibrated_range_km(), 0);
+  EXPECT_GT(v.battery_capacity_kwh(), 0.0);
+  EXPECT_TRUE(v.has_purchase_date());
+
   const auto req = data::MakeValidCreateVehicleRequest();
+  EXPECT_FALSE(req.has_id());                          // request omits id
   EXPECT_EQ(req.brand(), "Tesla");
-  EXPECT_GT(req.calibrated_range_km(), 0);
-  EXPECT_GT(req.battery_capacity_kwh(), 0.0);
-  EXPECT_TRUE(req.has_purchase_date());
   EXPECT_EQ(req.license_plate().substr(0, 2), "T-");
 }
 ```
 
+(Note: this test goes into `vehicle_service_test.cc` — Chunk 2 Task 9 will declare `class VehicleServiceIT : public ServiceITBase {};` per Chunk 4's pattern. Plan dependency: this smoke can run only after Chunk 2 Task 9 lands. If Chunk 2 Task 8 lands first, defer the smoke to a follow-up commit.)
+
 - [ ] **Step 4: Run + commit**
 
-Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=TestData.MakeValidCreateVehicleRequestIsValid`
-Expected: PASS.
+Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter='VehicleServiceIT.DataHelpers*'`
+Expected: PASS (after Chunk 2 Task 9 declares `VehicleServiceIT`).
 
 ```bash
 git add tests/integration/test_data.h tests/integration/test_data.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): MakeValidCreateVehicleRequest helper"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): TestData Vehicle helpers (MakeValidVehicle + MakeValidCreateVehicleRequest + FreshUuid + FreshLicensePlate) + runtime smoke"
 ```
 
 ---
