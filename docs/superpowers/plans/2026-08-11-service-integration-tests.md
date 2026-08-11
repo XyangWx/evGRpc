@@ -888,16 +888,24 @@ TEST_F(VehicleServiceIT, CreateVehicle_DuplicateLicensePlate_Conflict) {
 }
 ```
 
-- [ ] **Step 3: Add empty-license-plate INVALID_ARGUMENT case (relies on Task 7 mapping)**
+- [ ] **Step 3: Add empty-license-plate **ACCEPTED** case (post-empirical-verification)**
+
+**Plan-bug deviation (caught by Task 9 implementer, fixed at commit `123cc2a`):** PostgreSQL's `NOT NULL` constraint only rejects `NULL` values, not empty strings. The implementer empirically verified against the running DB on 2026-08-11: `INSERT INTO vehicle (..., LicensePlate) VALUES (..., '')` **succeeds** and stores `""`. The application has no app-level validation either. The original spec assertion (`INVALID_ARGUMENT` via `not_null_violation`) was based on a wrong assumption about PG semantics. **Decision:** test now asserts `EXPECT_TRUE(st.ok())` and serves as a **regression guard** — if schema or app-level validation is added later (`CHECK (length(LicensePlate) > 0)` or app validation), the test will fail and force a deliberate decision. The detailed comment in the test documents the discrepancy.
 
 ```cpp
-TEST_F(VehicleServiceIT, CreateVehicle_EmptyLicensePlate_InvalidArgument) {
+TEST_F(VehicleServiceIT, CreateVehicle_EmptyLicensePlate_Accepted) {
+  // Regression guard: PG `NOT NULL` doesn't reject empty strings (verified
+  // 2026-08-11). If schema gains `CHECK (length(LicensePlate) > 0)` or app-level
+  // validation is added, this test fails — expected to be inverted then.
   auto stub = VehicleService::NewStub(channel());
   auto req = data::MakeValidCreateVehicleRequest();
-  req.set_license_plate("");  // triggers NOT NULL → INVALID_ARGUMENT via Task 7
+  req.set_license_plate("");
   Vehicle resp; grpc::ClientContext ctx;
   grpc::Status st = stub->CreateVehicle(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_TRUE(st.ok());
+  EXPECT_FALSE(resp.id().empty());
+}
+```
 }
 ```
 
