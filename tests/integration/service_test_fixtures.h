@@ -7,6 +7,12 @@
 
 namespace evgrpc::test {
 
+// Single-TestServer-per-suite fixture for SERVICE-SHAPE tests only
+// (no_auth=true). The shared static `server_` is hard-coded to
+// `Options{.no_auth = true}` and cannot be overridden by derived
+// fixtures — this prevents silent drift toward a real JWKS / bearer-token
+// round-trip setup. Auth tests should NOT derive from this class; if/when
+// added, create a parallel `ServiceITBaseAuthed` with per-suite storage.
 class ServiceITBase : public ::testing::Test {
  protected:
   static void SetUpTestSuite();   // creates TestServer once per suite
