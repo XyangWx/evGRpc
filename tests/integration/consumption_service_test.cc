@@ -59,4 +59,53 @@ TEST_F(ConsumptionServiceIT, DataHelpers_ProduceValidIds) {
   EXPECT_EQ(cid.size(), 36u);
 }
 
+// Task 24: CreateConsumption happy path. Exercises the full helper
+// chain — vehicle → weather (direct SQL) → CreateConsumption — and
+// asserts the server-set id is non-empty and both FK refs round-trip
+// unchanged in the response.
+TEST_F(ConsumptionServiceIT, CreateConsumption_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  const auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  Consumption resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateConsumption(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.id().empty());
+  EXPECT_EQ(resp.vehicle_id(), vid);
+  EXPECT_EQ(resp.weather_id(), wid);
+}
+
+// Task 24: CreateConsumption with a non-existent vehicle FK. The
+// production handler is expected to surface this as INVALID_ARGUMENT
+// (FK pre-check rejects before the DB round-trip — same path as
+// Chunk 3's ChargingServiceIT.CreateCharging_InvalidVehicleId).
+TEST_F(ConsumptionServiceIT, CreateConsumption_InvalidVehicleId_InvalidArgument) {
+  const auto wid = data::CreateWeatherId(pg());  // real
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(
+      "00000000-0000-0000-0000-000000000000",  // non-existent vehicle
+      wid);
+  Consumption resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateConsumption(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// Task 24: CreateConsumption with highest_temperature_c <
+// lowest_temperature_c. ValidateConsumption rejects before the DB
+// round-trip (line 81-83 of consumption_service.cc).
+TEST_F(ConsumptionServiceIT, CreateConsumption_HighestTempLtLowest_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  req.set_highest_temperature_c(5.0);
+  req.set_lowest_temperature_c(20.0);  // highest < lowest -> INVALID_ARGUMENT
+  Consumption resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateConsumption(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
