@@ -1696,7 +1696,7 @@ If any Task fails verification, **STOP** and surface to the user before continui
 
 ## Chunk 4: ConsumptionService
 
-13 cases across 8 Tasks (1 helper-extension + 5 RPCs + 1 coverage + 1 conditional). ConsumptionService has FK dependencies on `vehicle` AND `weather` tables. **Implementation note**: `weather_id` is created via direct SQL (not via WeatherService) so this chunk has no cross-chunk dependency on the WeatherService (which is implemented in Chunk 6). This keeps the chunk self-contained.
+13 cases across 8 Tasks (1 helper-extension + 5 RPCs + 1 coverage + 1 conditional). ConsumptionService has FK dependencies on `vehicle` AND `weather` tables. **Implementation note**: `weather_id` is created via direct SQL (not via WeatherService) so this chunk has no cross-chunk dependency on the WeatherService (which is implemented in Chunk 6).
 
 ### Proto field reference (verified ground truth)
 
@@ -1704,7 +1704,7 @@ If any Task fails verification, **STOP** and surface to the user before continui
 - `Consumption` (response) — 14 fields: `id, vehicle_id, start, end, begin_percent, end_percent, begin_mileage_km, end_mileage_km, begin_range_km, end_range_km, highest_temperature_c, lowest_temperature_c, weather_id, remark`
 - `CreateConsumptionRequest` — 13 fields (no `id`); same shape as `Consumption` minus the response `id`
 - `GetConsumptionRequest { id }` / `UpdateConsumptionRequest { id, ... }` (fields flat) / `DeleteConsumptionRequest { id }`
-- `ListConsumptionsRequest { page_size, page_token, vehicle_id, weather_id, start_after, start_before, ... }` (response has `repeated consumptions` + `next_page_token`; many filter fields)
+- `ListConsumptionsRequest { page_size, page_token, vehicle_id, start_after, start_before }` (response has `repeated consumptions` + `next_page_token`; **3 filters**: `vehicle_id`, `start_after`, `start_before`)
 
 ### Impl validation contract (verified from `src/services/consumption_service.cc:5-22`)
 
@@ -1713,15 +1713,16 @@ If any Task fails verification, **STOP** and surface to the user before continui
 - `end_percent >= begin_percent` (note: inverse of `Charging` which checks `end_percent <= start_percent`)
 - `highest_temperature_c < lowest_temperature_c`
 
-`UpdateConsumption` re-runs the same validator (verified at line 175 area, after building the `v` request struct).
+`UpdateConsumption` re-runs the same validator (verified in impl).
 
-**DB constraints** (from `sql/001_initial.sql`):
-- `vehicle_id` is `NOT NULL REFERENCES vehicle(Id)` (FK violation → `INVALID_ARGUMENT` via Chunk 2 Task 7).
-- `weather_id` may be `NULL` (not `NOT NULL`) — verify by reading the schema; if not nullable, use the `data::CreateWeatherId` helper.
+**DB constraints** (verified from `sql/001_initial.sql:26`):
+- `vehicle_id` and `weather_id` are BOTH `NOT NULL` and `REFERENCES vehicle(Id)` / `REFERENCES weather(Id)` (FK violation → `INVALID_ARGUMENT` via Chunk 2 Task 7).
+
+**Test pattern note**: `ServiceITBase::channel()` / `ServiceITBase::pg()` qualified calls will NOT compile — these are non-static instance methods. Tests must use bare `channel()` / `pg()` (implicit `this`). Same issue exists in Chunk 3; **Chunk 3 needs the same fix** (out of scope here, flagged in commit message).
 
 ---
 
-### Task 23: Extend `data::` with `CreateWeatherId` (direct SQL) + `MakeValidCreateConsumptionRequest` + `ToUpdateConsumptionRequest`
+### Task 23: Extend `data::` with `CreateWeatherId` (direct SQL) + `MakeValidCreateConsumptionRequest` + `ToUpdateConsumptionRequest` + auto-creating `CreateConsumptionId`
 
 **Files:**
 - Modify: `tests/integration/test_data.h`
@@ -1742,17 +1743,19 @@ namespace evgrpc::test::data {
 // WeatherService (Chunk 6). Returns the new weather Id.
 std::string CreateWeatherId(std::shared_ptr<PgContainer> pg);
 
-// ChargingService had a stub param for the channel; Consumption uses
-// both: the channel for gRPC calls and the PgContainer for the direct
-// weather insert. Add a ServiceITBase accessor for the PgContainer.
+// Convenience: auto-creates a weather row, then a consumption row.
+// Returns the consumption id. Use this in tests that don't need to
+// assert on a specific weather_id.
 std::string CreateConsumptionId(
     std::shared_ptr<grpc::Channel> channel,
     std::shared_ptr<PgContainer> pg,
     const std::string& vehicle_id);
 
+// Note: `weather_id` is REQUIRED (DB column is NOT NULL with FK).
+// There is NO default value. Callers must supply a real weather id.
 CreateConsumptionRequest MakeValidCreateConsumptionRequest(
     const std::string& vehicle_id,
-    const std::string& weather_id = "");  // weather optional (may be empty/nullable)
+    const std::string& weather_id);
 
 void CopyToUpdateRequest(const CreateConsumptionRequest& src,
                          UpdateConsumptionRequest* dst);
@@ -1776,9 +1779,8 @@ std::string CreateWeatherId(std::shared_ptr<PgContainer> pg) {
   auto conn = std::make_shared<pqxx::connection>(pg->Conninfo());
   pqxx::work tx(*conn);
   const std::string id = NewUuid();
-  // Match `sql/001_initial.sql` weather table schema. Adjust if
-  // schema differs (e.g. additional required fields). Verify by
-  // reading the weather CREATE TABLE statement.
+  // Match `sql/001_initial.sql:18-21` weather table schema:
+  //   Id UUID PRIMARY KEY, Name VARCHAR(36) NOT NULL UNIQUE
   tx.exec_params(
       "INSERT INTO weather (Id, Name) VALUES ($1, $2)",
       id, "W-" + id.substr(0, 8));
@@ -1790,8 +1792,9 @@ std::string CreateConsumptionId(
     std::shared_ptr<grpc::Channel> channel,
     std::shared_ptr<PgContainer> pg,
     const std::string& vehicle_id) {
+  const auto wid = CreateWeatherId(pg);  // auto-create FK prerequisite
   auto stub = ConsumptionService::NewStub(channel);
-  const auto req = MakeValidCreateConsumptionRequest(vehicle_id);
+  const auto req = MakeValidCreateConsumptionRequest(vehicle_id, wid);
   Consumption resp; grpc::ClientContext ctx;
   CHECK(stub->CreateConsumption(&ctx, req, &resp).ok());
   return resp.id();
@@ -1802,6 +1805,7 @@ CreateConsumptionRequest MakeValidCreateConsumptionRequest(
     const std::string& weather_id) {
   CreateConsumptionRequest req;
   req.set_vehicle_id(vehicle_id);
+  req.set_weather_id(weather_id);  // REQUIRED — no default
   google::protobuf::Timestamp start; start.set_seconds(1700000000);
   google::protobuf::Timestamp end;   end.set_seconds(1700003600);
   *req.mutable_start() = start;
@@ -1814,7 +1818,6 @@ CreateConsumptionRequest MakeValidCreateConsumptionRequest(
   req.set_end_range_km(350);
   req.set_highest_temperature_c(25.0);
   req.set_lowest_temperature_c(10.0);
-  if (!weather_id.empty()) req.set_weather_id(weather_id);
   return req;
 }
 
@@ -1846,12 +1849,11 @@ UpdateConsumptionRequest ToUpdateConsumptionRequest(const CreateConsumptionReque
 
 ```cpp
 TEST_F(ConsumptionServiceIT, DataHelpers_ProduceValidIds) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
+  const auto vid = data::CreateVehicleId(channel());
   EXPECT_FALSE(vid.empty());
-  const auto wid = data::CreateWeatherId(ServiceITBase::pg());
+  const auto wid = data::CreateWeatherId(pg());
   EXPECT_FALSE(wid.empty());
-  const auto cid = data::CreateConsumptionId(channel, ServiceITBase::pg(), vid);
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
   EXPECT_FALSE(cid.empty());
 }
 ```
@@ -1860,7 +1862,7 @@ TEST_F(ConsumptionServiceIT, DataHelpers_ProduceValidIds) {
 
 ```bash
 git add tests/integration/test_data.h tests/integration/test_data.cc tests/integration/service_test_fixtures.h
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): ConsumptionService helpers + CreateWeatherId via direct SQL + ServiceITBase::pg()"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): ConsumptionService helpers + CreateWeatherId + auto-creating CreateConsumptionId (weather_id NOT NULL)"
 ```
 
 ---
@@ -1871,16 +1873,15 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 - Create: `tests/integration/consumption_service_test.cc`
 - Modify: `tests/integration/CMakeLists.txt`
 
-- [ ] **Step 1: Write happy-path test**
+- [ ] **Step 1: Write happy-path test (explicit weather_id round-trip)**
 
 ```cpp
 class ConsumptionServiceIT : public ServiceITBase {};
 
 TEST_F(ConsumptionServiceIT, CreateConsumption_HappyPath) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  const auto wid = data::CreateWeatherId(ServiceITBase::pg());
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
   const auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
   Consumption resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->CreateConsumption(&ctx, req, &resp).ok());
@@ -1894,11 +1895,10 @@ TEST_F(ConsumptionServiceIT, CreateConsumption_HappyPath) {
 
 ```cpp
 TEST_F(ConsumptionServiceIT, CreateConsumption_InvalidVehicleId_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
-  const auto wid = data::CreateWeatherId(ServiceITBase::pg());
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto wid = data::CreateWeatherId(pg());  // real
+  auto stub = ConsumptionService::NewStub(channel());
   auto req = data::MakeValidCreateConsumptionRequest(
-      "00000000-0000-0000-0000-000000000000", wid);
+      "00000000-0000-0000-0000-000000000000", wid);  // non-existent vehicle
   Consumption resp; grpc::ClientContext ctx;
   grpc::Status st = stub->CreateConsumption(&ctx, req, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
@@ -1909,10 +1909,10 @@ TEST_F(ConsumptionServiceIT, CreateConsumption_InvalidVehicleId_InvalidArgument)
 
 ```cpp
 TEST_F(ConsumptionServiceIT, CreateConsumption_HighestTempLtLowest_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  auto stub = ConsumptionService::NewStub(channel);
-  auto req = data::MakeValidCreateConsumptionRequest(vid);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
   req.set_highest_temperature_c(5.0);
   req.set_lowest_temperature_c(20.0);  // highest < lowest → INVALID_ARGUMENT
   Consumption resp; grpc::ClientContext ctx;
@@ -1932,14 +1932,13 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consu
 
 ### Task 25: `GetConsumption` (2 cases)
 
-- [ ] **Step 1: Write happy-path test (uses full helper chain)**
+- [ ] **Step 1: Write happy-path test (uses CreateConsumptionId helper)**
 
 ```cpp
 TEST_F(ConsumptionServiceIT, GetConsumption_HappyPath) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  const auto cid = data::CreateConsumptionId(channel, ServiceITBase::pg(), vid);
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+  auto stub = ConsumptionService::NewStub(channel());
   GetConsumptionRequest greq; greq.set_id(cid);
   Consumption got; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetConsumption(&ctx, greq, &got).ok());
@@ -1952,7 +1951,7 @@ TEST_F(ConsumptionServiceIT, GetConsumption_HappyPath) {
 
 ```cpp
 TEST_F(ConsumptionServiceIT, GetConsumption_NotFound) {
-  auto stub = ConsumptionService::NewStub(ServiceITBase::channel());
+  auto stub = ConsumptionService::NewStub(channel());
   GetConsumptionRequest req; req.set_id("00000000-0000-0000-0000-000000000000");
   Consumption got; grpc::ClientContext ctx;
   grpc::Status st = stub->GetConsumption(&ctx, req, &got);
@@ -1975,13 +1974,13 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consu
 
 ```cpp
 TEST_F(ConsumptionServiceIT, UpdateConsumption_HappyPath) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
   Consumption created; grpc::ClientContext c1;
   ASSERT_TRUE(stub->CreateConsumption(&c1,
-      data::MakeValidCreateConsumptionRequest(vid), &created).ok());
-  auto template_req = data::MakeValidCreateConsumptionRequest(vid);
+      data::MakeValidCreateConsumptionRequest(vid, wid), &created).ok());
+  auto template_req = data::MakeValidCreateConsumptionRequest(vid, wid);
   template_req.set_end_mileage_km(10200);  // the change
   UpdateConsumptionRequest ureq = data::ToUpdateConsumptionRequest(template_req);
   ureq.set_id(created.id());
@@ -1992,15 +1991,15 @@ TEST_F(ConsumptionServiceIT, UpdateConsumption_HappyPath) {
 }
 ```
 
-- [ ] **Step 2: Add NOT_FOUND case (uses ToUpdateConsumptionRequest so validator passes)**
+- [ ] **Step 2: Add NOT_FOUND case**
 
 ```cpp
 TEST_F(ConsumptionServiceIT, UpdateConsumption_NotFound) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
   UpdateConsumptionRequest ureq = data::ToUpdateConsumptionRequest(
-      data::MakeValidCreateConsumptionRequest(vid));
+      data::MakeValidCreateConsumptionRequest(vid, wid));
   ureq.set_id("00000000-0000-0000-0000-000000000000");
   Consumption resp; grpc::ClientContext ctx;
   grpc::Status st = stub->UpdateConsumption(&ctx, ureq, &resp);
@@ -2008,17 +2007,17 @@ TEST_F(ConsumptionServiceIT, UpdateConsumption_NotFound) {
 }
 ```
 
-- [ ] **Step 3: Add validation failure case (highest_temp < lowest_temp in update → INVALID_ARGUMENT)**
+- [ ] **Step 3: Add validation failure case**
 
 ```cpp
 TEST_F(ConsumptionServiceIT, UpdateConsumption_TempValidation_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
   Consumption created; grpc::ClientContext c1;
   ASSERT_TRUE(stub->CreateConsumption(&c1,
-      data::MakeValidCreateConsumptionRequest(vid), &created).ok());
-  auto template_req = data::MakeValidCreateConsumptionRequest(vid);
+      data::MakeValidCreateConsumptionRequest(vid, wid), &created).ok());
+  auto template_req = data::MakeValidCreateConsumptionRequest(vid, wid);
   template_req.set_highest_temperature_c(0.0);
   template_req.set_lowest_temperature_c(20.0);
   UpdateConsumptionRequest ureq = data::ToUpdateConsumptionRequest(template_req);
@@ -2044,10 +2043,9 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consu
 
 ```cpp
 TEST_F(ConsumptionServiceIT, DeleteConsumption_HappyPath) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  const auto cid = data::CreateConsumptionId(channel, ServiceITBase::pg(), vid);
-  auto stub = ConsumptionService::NewStub(channel);
+  const auto vid = data::CreateVehicleId(channel());
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+  auto stub = ConsumptionService::NewStub(channel());
   DeleteConsumptionRequest dreq; dreq.set_id(cid);
   google::protobuf::Empty empty; grpc::ClientContext c1;
   ASSERT_TRUE(stub->DeleteConsumption(&c1, dreq, &empty).ok());
@@ -2062,7 +2060,7 @@ TEST_F(ConsumptionServiceIT, DeleteConsumption_HappyPath) {
 
 ```cpp
 TEST_F(ConsumptionServiceIT, DeleteConsumption_NotFound) {
-  auto stub = ConsumptionService::NewStub(ServiceITBase::channel());
+  auto stub = ConsumptionService::NewStub(channel());
   DeleteConsumptionRequest dreq; dreq.set_id("00000000-0000-0000-0000-000000000000");
   google::protobuf::Empty resp; grpc::ClientContext ctx;
   grpc::Status st = stub->DeleteConsumption(&ctx, dreq, &resp);
@@ -2085,14 +2083,34 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consu
 
 ```cpp
 TEST_F(ConsumptionServiceIT, ListConsumptions_HappyPath_MultipleRows) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
+  const auto vid = data::CreateVehicleId(channel());
   for (int i = 0; i < 3; ++i) {
     Consumption v; grpc::ClientContext c;
-    ASSERT_TRUE(ConsumptionService::NewStub(channel)->CreateConsumption(
-        &c, data::MakeValidCreateConsumptionRequest(vid), &v).ok());
+    ASSERT_TRUE(ConsumptionService::NewStub(channel())->CreateConsumption(
+        &c, data::CreateConsumptionId(channel(), pg(), vid).empty()
+              ? data::MakeValidCreateConsumptionRequest(vid, data::CreateWeatherId(pg()))
+              : data::MakeValidCreateConsumptionRequest(vid, data::CreateWeatherId(pg())),
+        &v).ok());
   }
-  auto stub = ConsumptionService::NewStub(channel);
+  auto stub = ConsumptionService::NewStub(channel());
+  ListConsumptionsRequest req;
+  ListConsumptionsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListConsumptions(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.consumptions_size(), 3);
+  EXPECT_TRUE(resp.next_page_token().empty());
+}
+```
+
+(Implementer: the inline conditional above is a copy/paste artifact. Simplify to: in each loop iteration, create the consumption via the auto-helper and assert OK. Cleaner version below; pick this one.)
+
+```cpp
+TEST_F(ConsumptionServiceIT, ListConsumptions_HappyPath_MultipleRows) {
+  const auto vid = data::CreateVehicleId(channel());
+  for (int i = 0; i < 3; ++i) {
+    const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+    EXPECT_FALSE(cid.empty());
+  }
+  auto stub = ConsumptionService::NewStub(channel());
   ListConsumptionsRequest req;
   ListConsumptionsResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListConsumptions(&ctx, req, &resp).ok());
@@ -2105,7 +2123,7 @@ TEST_F(ConsumptionServiceIT, ListConsumptions_HappyPath_MultipleRows) {
 
 ```cpp
 TEST_F(ConsumptionServiceIT, ListConsumptions_Empty) {
-  auto stub = ConsumptionService::NewStub(ServiceITBase::channel());
+  auto stub = ConsumptionService::NewStub(channel());
   ListConsumptionsRequest req;
   ListConsumptionsResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListConsumptions(&ctx, req, &resp).ok());
@@ -2118,14 +2136,12 @@ TEST_F(ConsumptionServiceIT, ListConsumptions_Empty) {
 
 ```cpp
 TEST_F(ConsumptionServiceIT, ListConsumptions_Pagination) {
-  auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
+  const auto vid = data::CreateVehicleId(channel());
   for (int i = 0; i < 5; ++i) {
-    Consumption v; grpc::ClientContext c;
-    ASSERT_TRUE(ConsumptionService::NewStub(channel)->CreateConsumption(
-        &c, data::MakeValidCreateConsumptionRequest(vid), &v).ok());
+    const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+    EXPECT_FALSE(cid.empty());
   }
-  auto stub = ConsumptionService::NewStub(channel);
+  auto stub = ConsumptionService::NewStub(channel());
   ListConsumptionsRequest req1; req1.set_page_size(2);
   ListConsumptionsResponse resp1; grpc::ClientContext c1;
   ASSERT_TRUE(stub->ListConsumptions(&c1, req1, &resp1).ok());
@@ -2177,23 +2193,57 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 
 ### Task 30 (conditional): Coverage gap closure — only run if Task 29 shows < 95%
 
-**Why conditional:** R2 reviewer for Chunk 3 estimated similar coverage headroom for ConsumptionService. Likely missed branches:
+**Why conditional:** Likely missed branches:
 
-1. **`ListConsumptions` filter branches**: `vehicle_id`, `weather_id`, `start_after`, `start_before` (4 filters verified in `consumption_service.cc:35-55`).
-2. **Remaining `ValidateConsumption` branches**: `end <= start` (only temp validation covered).
-3. **`RowToConsumption` non-default fields**: `remark`, `weather_id` with value.
+1. **`ListConsumptions` filter branches** (3 filters per impl): `vehicle_id`, `start_after`, `start_before`.
+2. **Remaining `ValidateConsumption` branch**: `end <= start` (only temp validation covered).
+3. **`RowToConsumption` non-default fields**: `remark` (with `weather_id` already exercised in Task 24 Step 1).
 
 If coverage < 95%, add:
 
-- [ ] **Step 1: Add 4 filtered `ListConsumptions` cases** (one per filter)
-- [ ] **Step 2: Add 1 `end_le_start` validation case** (Task 24 Step 4)
-- [ ] **Step 3: Add a `MakeValidCreateConsumptionRequestFull` variant** with `set_remark("trip notes")` and `set_weather_id(...)` non-empty
+- [ ] **Step 1: Add 3 filtered `ListConsumptions` cases** (one per filter)
+
+```cpp
+TEST_F(ConsumptionServiceIT, ListConsumptions_FilterByVehicleId) {
+  // ... create 2 on vid_a + 1 on vid_b, filter by vid_a → 2
+}
+
+TEST_F(ConsumptionServiceIT, ListConsumptions_FilterByStartAfter) {
+  // ... 3 rows with varying start times, filter by start_after=mid → fewer
+}
+
+TEST_F(ConsumptionServiceIT, ListConsumptions_FilterByStartBefore) {
+  // ... 3 rows, filter by start_before=mid → fewer
+}
+```
+
+- [ ] **Step 2: Add 1 `end_le_start` validation case**
+
+```cpp
+TEST_F(ConsumptionServiceIT, CreateConsumption_EndLeStart_InvalidArgument) {
+  // ... make valid request, set end = start (via set_seconds equal) → INVALID_ARGUMENT
+}
+```
+
+- [ ] **Step 3: Add a `MakeValidCreateConsumptionRequest` variant with `remark` set**
+
+Extend the helper (or add `MakeValidCreateConsumptionRequestFull`) that calls `set_remark("trip notes")`. Add one test that uses it and asserts the response round-trips `remark`.
+
 - [ ] **Step 4: Re-run lcov; expect ≥ 95%**
+
+```bash
+cd cmake-build-cov && \
+  lcov --capture --directory . --output-file consumption.info \
+       --include '*/src/services/consumption_service.cc' \
+       --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
+lcov --summary consumption.info 2>&1 | grep -E 'lines|====='
+```
+
 - [ ] **Step 5: Commit coverage closure**
 
 ```bash
 git add tests/integration/consumption_service_test.cc tests/integration/test_data.h tests/integration/test_data.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consumption): coverage gap closure — filtered list + missing validation + non-default field round-trip"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consumption): coverage gap closure — filtered list + end-le-start validation + remark round-trip"
 ```
 
 ---
@@ -2203,7 +2253,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(consu
 After Chunk 4 lands:
 - `evgrpc_integration_tests` has 13 ConsumptionService cases (Create 3 + Get 2 + Update 3 + Delete 2 + List 3), all green.
 - `consumption_service.cc` coverage ≥ 95%.
-- `data::CreateWeatherId` (direct SQL) + `MakeValidCreateConsumptionRequest` + `ToUpdateConsumptionRequest` helpers available.
+- `data::CreateWeatherId` (direct SQL) + `MakeValidCreateConsumptionRequest` (weather_id required) + `CreateConsumptionId` (auto-creates weather) + `ToUpdateConsumptionRequest` helpers available.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
 
