@@ -625,7 +625,7 @@ If any Chunk 1 task fails verification, **STOP** and surface to the user before 
 
 ## Chunk 2: VehicleService
 
-15 cases across 6 Tasks: 1 precursor + 5 RPCs (CreateVehicle ×3, GetVehicle ×2, UpdateVehicle ×3, DeleteVehicle ×2, ListVehicles ×3) + 1 coverage verification. Builds on Chunk 1's `ServiceITBase`. Adds `data::MakeValidCreateVehicleRequest()` (note: returns `CreateVehicleRequest`, **not** `Vehicle`) and a precursor production-code change in `src/db/error.cc`.
+13 cases across 8 Tasks (1 precursor + 1 helper + 5 RPCs + 1 coverage). Specifically: Task 7 (precursor) + Task 8 (helper) + Tasks 9–13 (5 RPCs: CreateVehicle ×3, GetVehicle ×2, UpdateVehicle ×3, DeleteVehicle ×2, ListVehicles ×3) + Task 14 (lcov verification). Builds on Chunk 1's `ServiceITBase`. Adds `data::MakeValidCreateVehicleRequest()` (note: returns `CreateVehicleRequest`, **not** `Vehicle`) and a precursor production-code change in `src/db/error.cc`.
 
 ### Proto field reference (verified ground truth)
 
@@ -655,13 +655,12 @@ Add to `tests/unit/test_error.cc`:
 #include <pqxx/pqxx>
 
 TEST(ToGrpcStatus, NotNullViolationMapsToInvalidArgument) {
-  // Construct a not_null_violation by triggering a NOT NULL insert
-  // against an in-memory table requires a real connection, so use the
-  // typed-throw path: catch a synthetic exception via the type hierarchy.
-  // Simplest reliable reproduction: use a fake exception type that
-  // pqxx will dispatch through the correct hierarchy.
-  pqxx::not_null_violation e("null value in column \"x\" violates not-null constraint",
-                             "23502");
+  // Construct a not_null_violation directly. pqxx 7.x constructor is
+  // (err, Q, sqlstate); we only need the dynamic_cast path, so the
+  // extra fields default to empty — passing `"23502"` as the second
+  // arg would land in the `Q` (query) slot, not `sqlstate`.
+  pqxx::not_null_violation e(
+      "null value in column \"x\" violates not-null constraint");
   grpc::Status st = evgrpc::ToGrpcStatus(e);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
@@ -750,7 +749,7 @@ CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
 }
 ```
 
-- [ ] **Step 3: Add runtime smoke (extending the Chunk 1 smoke test)**
+- [ ] **Step 3: Add runtime smoke (add to `tests/integration/test_data.cc`, after the Chunk 1 `TEST(TestData, MakeValidVehicleIsValid)` smoke)**
 
 ```cpp
 TEST(TestData, MakeValidCreateVehicleRequestIsValid) {
