@@ -225,4 +225,46 @@ TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Task 19: DeleteCharging happy path. Mints a charging via the helper
+// chain, deletes it, then asserts the post-condition by issuing a
+// GetCharging for the same id and expecting NOT_FOUND — proves the
+// DELETE actually removed the row (not just no-op'd). The delete RPC
+// returns google.protobuf.Empty per the proto definition, so we
+// hand a google::protobuf::Empty to receive the (empty) response.
+// Uses `chan` (not `channel`) to avoid shadowing ServiceITBase::channel().
+TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  const auto cid = data::CreateChargingId(chan, vid, sid);
+  auto stub = ChargingService::NewStub(chan);
+  DeleteChargingRequest dreq;
+  dreq.set_id(cid);
+  google::protobuf::Empty empty;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->DeleteCharging(&c1, dreq, &empty).ok());
+  // Confirm gone
+  GetChargingRequest greq;
+  greq.set_id(cid);
+  Charging got;
+  grpc::ClientContext c2;
+  EXPECT_EQ(stub->GetCharging(&c2, greq, &got).error_code(),
+            grpc::StatusCode::NOT_FOUND);
+}
+
+// Task 19: DeleteCharging with an id that does not exist (all-zero
+// UUID). The delete is a no-op SQL-wise; production is expected to
+// surface this as NOT_FOUND so callers can distinguish "already gone"
+// from "delete failed". Same all-zero-UUID sentinel used by Get/Update
+// NotFound cases for consistency.
+TEST_F(ChargingServiceIT, DeleteCharging_NotFound) {
+  auto stub = ChargingService::NewStub(channel());
+  DeleteChargingRequest dreq;
+  dreq.set_id("00000000-0000-0000-0000-000000000000");
+  google::protobuf::Empty resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->DeleteCharging(&ctx, dreq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
 }  // namespace evgrpc::test
