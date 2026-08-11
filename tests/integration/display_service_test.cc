@@ -387,9 +387,63 @@ TEST_F(DisplayServiceIT, GetRangeAccuracy_Filtered) {
   }
 }
 
-// The closing namespace brace lives at the END of the file.
-// Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
-// Use edit-tool with oldText including the closing brace as anchor
-// for appending subsequent TEST_Fs.
+// Task 39: GetTemperatureConsumptionCorrelation happy path. The
+// production query joins charging to consumption (ch.StartTime within
+// 24h of c.Start to c.EndTime), so seeded charging + consumption
+// rows for the same vehicle should produce >= 1 bucket.
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.buckets_size(), 0);
+}
+
+// Task 39: GetTemperatureConsumptionCorrelation empty case.
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.buckets_size(), 0);
+}
+
+// Task 39: GetTemperatureConsumptionCorrelation filtered case.
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp_unf;
+  grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx_unf, req_unf, &resp_unf).ok());
+  int total_unf = 0;
+  for (const auto& b : resp_unf.buckets()) total_unf += b.sample_count();
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  int total_filt = 0;
+  for (const auto& b : resp.buckets()) total_filt += b.sample_count();
+  EXPECT_LT(total_filt, total_unf);
+}
 
 }  // namespace evgrpc::test
