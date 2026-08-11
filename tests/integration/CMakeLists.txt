@@ -26,6 +26,7 @@ add_executable(evgrpc_integration_tests
   vehicle_service_test.cc   # NEW — Chunk 2 Task 9
   charging_service_test.cc  # NEW — Chunk 3 Task 15 (data:: helpers smoke)
   consumption_service_test.cc  # NEW — Chunk 4 Task 23 (data:: helpers smoke)
+  display_service_test.cc  # NEW — Chunk 5 Task 31 (data:: helpers smoke)
 )
 target_link_libraries(evgrpc_integration_tests PRIVATE
   gtest                # InitGoogleTest / RUN_ALL_TESTS / TEST_F

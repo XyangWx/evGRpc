@@ -270,6 +270,47 @@ UpdateConsumptionRequest ToUpdateConsumptionRequest(
   return dst;
 }
 
+// ---- DisplayService helpers (Chunk 5, Task 31) ----
+//
+// `DefaultTimeRange` covers any data the Chunks 3/4 helpers seed
+// (their start.set_seconds(1700000000) = 2023-11-14 falls inside
+// 2023-01-01..2024-01-01).
+//
+// `SeedVehicleDataForDisplay` chains CreateSourceCategoryId +
+// CreateChargingId + CreateConsumptionId so DisplayService tests
+// have non-empty aggregations to assert against. Throws on any
+// helper returning empty (no silent partial-seed).
+
+TimeRange DefaultTimeRange() {
+  TimeRange r;
+  r.start.set_seconds(1672531200);   // 2023-01-01 00:00:00 UTC
+  r.end.set_seconds(1704067200);     // 2024-01-01 00:00:00 UTC
+  return r;
+}
+
+void SeedVehicleDataForDisplay(
+    std::shared_ptr<grpc::Channel> channel,
+    std::shared_ptr<PgContainer> pg,
+    const std::string& vehicle_id,
+    int n_chargings,
+    int n_consumptions) {
+  const auto sid = CreateSourceCategoryId(channel);
+  for (int i = 0; i < n_chargings; ++i) {
+    const auto cid = CreateChargingId(channel, vehicle_id, sid);
+    if (cid.empty()) {
+      throw std::runtime_error(
+          "SeedVehicleDataForDisplay: CreateChargingId returned empty");
+    }
+  }
+  for (int i = 0; i < n_consumptions; ++i) {
+    const auto cid = CreateConsumptionId(channel, pg, vehicle_id);
+    if (cid.empty()) {
+      throw std::runtime_error(
+          "SeedVehicleDataForDisplay: CreateConsumptionId returned empty");
+    }
+  }
+}
+
 // NOTE: Chunk 5 forward-deps (DefaultTimeRange, SeedVehicleDataForDisplay)
 // were forward-DECLARED in test_data.h but their bodies depend on
 // helpers that don't all exist yet:

@@ -25,6 +25,7 @@
 #include "evgrpc/charging.pb.h"             // CreateChargingRequest, UpdateChargingRequest
 #include "evgrpc/consumption.pb.h"           // CreateConsumptionRequest, UpdateConsumptionRequest
 #include "evgrpc/source_category.pb.h"       // CreateSourceCategoryRequest
+#include "evgrpc/display.pb.h"               // PeriodReport, VehicleCostSummary, list responses
 #include "fixtures/pg_container.h"
 
 namespace evgrpc::test::data {
@@ -159,6 +160,15 @@ CreateConsumptionRequest MakeValidCreateConsumptionRequest(
 // (Task 26) to avoid 13-field copy-paste.
 UpdateConsumptionRequest ToUpdateConsumptionRequest(
     const CreateConsumptionRequest& src);
+
+// ---- DisplayService helpers (Chunk 5, Task 31) ----
+//
+// `DefaultTimeRange` covers 2023-01-01 to 2024-01-01 so any helper-
+// generated charging/consumption row (which use 2023-11-14 as their
+// timestamp) is inside the window. `SeedVehicleDataForDisplay`
+// populates enough charging + consumption rows to make every
+// aggregation RPC non-empty (3 of each is enough to exercise both
+// charger-type breakdowns and monthly aggregations).
 
 // Time range — covers Nov 2023 (the seeded helper range) with margin.
 // Helpers in Chunks 3/4 use start.set_seconds(1700000000) = 2023-11-14.
