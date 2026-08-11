@@ -1000,23 +1000,32 @@ TEST_F(VehicleServiceIT, UpdateVehicle_NotFound) {
 }
 ```
 
-- [ ] **Step 3: Add empty-license-plate INVALID_ARGUMENT case**
+- [ ] **Step 3: Add empty-license-plate **ACCEPTED** case (post-empirical-verification)**
+
+**Plan-bug deviation (caught by Task 11 implementer, fixed at commit `2876030`):** Same trap as Task 9. PostgreSQL's `NOT NULL` constraint only rejects `NULL` values, not empty strings. The implementer empirically verified — `VehicleServiceImpl::UpdateVehicle` has no app-level validation, so the UPDATE succeeds with empty plate. **Decision:** test now asserts `EXPECT_TRUE(st.ok())` + `EXPECT_EQ(resp.license_plate(), "")` and serves as a **regression guard** for future schema changes (e.g., `CHECK (length(LicensePlate) > 0)`) or app-level validation. Mirrors Task 9 precedent at commit `123cc2a` + plan fix `1ec50b3`.
 
 ```cpp
-TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_InvalidArgument) {
+TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_Accepted) {
+  // Regression guard: PG `NOT NULL` doesn't reject empty strings (verified
+  // 2026-08-11, same as Task 9's CreateVehicle_EmptyLicensePlate_Accepted).
+  // `VehicleServiceImpl::UpdateVehicle` has no app-level validation either.
+  // If schema gains `CHECK (length(LicensePlate) > 0)` or app validation is
+  // added, this test fails — expected to be inverted then.
   auto stub = VehicleService::NewStub(channel());
   Vehicle created; grpc::ClientContext ctx1;
-  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok());
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok())
+      << ctx1.debug_error_string();
   UpdateVehicleRequest ureq;
   ureq.set_id(created.id());
   ureq.set_brand("Renault");
   ureq.set_calibrated_range_km(created.calibrated_range_km());
   ureq.set_battery_capacity_kwh(created.battery_capacity_kwh());
   *ureq.mutable_purchase_date() = created.purchase_date();
-  ureq.set_license_plate("");  // NOT NULL → INVALID_ARGUMENT via Task 7
+  ureq.set_license_plate("");
   Vehicle resp; grpc::ClientContext ctx2;
   grpc::Status st = stub->UpdateVehicle(&ctx2, ureq, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_TRUE(st.ok());
+  EXPECT_EQ(resp.license_plate(), "");
 }
 ```
 
