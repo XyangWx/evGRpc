@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(EVGRPC_COVERAGE "Enable coverage instrumentation (gcov)" OFF)
+if(EVGRPC_COVERAGE)
+  add_compile_options(--coverage -O0 -g)
+  add_link_options(--coverage)
+endif()
+
 include(cmake/deps.cmake)
 include(cmake/protoc.cmake)
 
