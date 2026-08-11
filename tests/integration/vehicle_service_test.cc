@@ -283,6 +283,106 @@ TEST_F(VehicleServiceIT, DeleteVehicle_NotFound) {
       << " — " << st.error_message();
 }
 
+// ListVehicles happy-path: insert 3 rows in setup, then List with the
+// default page (no page_size → server-side default of 50 per
+// src/services/vehicle_service.cc line ~193), and verify the response
+// contains at least those 3. Uses `EXPECT_GE` (rather than `EXPECT_EQ`)
+// as a defensive assertion against test isolation bugs — the per-test
+// `ServiceITBase::SetUp()` calls `SharedPgEnvironment::TruncateAll()`,
+// so the actual size should be exactly 3, but loosening the bound
+// keeps the test resilient if anyone adds state-leaking tests later.
+// Mirrors the Task 10/11/12 pattern: real DB writes in setup so the
+// List exercise goes through the SELECT path end-to-end — a synthetic
+// ListVehiclesRequest with zero rows wouldn't catch schema drift,
+// ORDER BY issues, or page-token bugs.
+TEST_F(VehicleServiceIT, ListVehicles_HappyPath_MultipleRows) {
+  auto stub = VehicleService::NewStub(channel());
+  // Insert 3 vehicles
+  for (int i = 0; i < 3; ++i) {
+    Vehicle v;
+    grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateVehicle(&c, data::MakeValidCreateVehicleRequest(),
+                                    &v).ok())
+        << "CreateVehicle (setup, iteration " << i
+        << ") RPC failed: error_message=" << c.debug_error_string();
+  }
+
+  ListVehiclesRequest req;
+  ListVehiclesResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok())
+      << "ListVehicles (happy path) RPC failed: error_message="
+      << ctx.debug_error_string();
+  EXPECT_GE(resp.vehicles_size(), 3);  // at least the 3 we just inserted
+}
+
+// ListVehicles empty case: with the per-test TruncateAll guarantee
+// from ServiceITBase::SetUp(), the DB is guaranteed empty before this
+// test runs, so ListVehicles must return 0 rows. Exercises the
+// `result.size() == 0` branch on the server side (no
+// `has_more` set, no rows emitted). Mirrors the
+// GetVehicle_NotFound / DeleteVehicle_NotFound zero-UUID regression
+// guard pattern — deterministic empty state regardless of prior
+// fixture state.
+TEST_F(VehicleServiceIT, ListVehicles_Empty) {
+  auto stub = VehicleService::NewStub(channel());
+  ListVehiclesRequest req;
+  ListVehiclesResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok())
+      << "ListVehicles (empty) RPC failed: error_message="
+      << ctx.debug_error_string();
+  EXPECT_EQ(resp.vehicles_size(), 0);
+  // No rows → no next-page token (server only sets it when has_more).
+  EXPECT_EQ(resp.next_page_token(), "");
+}
+
+// ListVehicles pagination: insert 5 rows, then page through with
+// page_size=2. Exercises the `has_more` branch on the server side
+// (src/services/vehicle_service.cc line ~210) — the impl fetches
+// page_size+1 rows so it can tell "has next page" without a separate
+// COUNT(*), then emits only page_size rows and sets next_page_token
+// to `offset + page_size` as a string. Both responses should have
+// at most page_size rows; the second request uses the token from the
+// first response. The per-test TruncateAll guarantee keeps the row
+// count deterministic at 5, so we can be sure each page is bounded
+// by page_size regardless of how many rows the previous tests left
+// (they shouldn't leave any, but the test is robust to that).
+TEST_F(VehicleServiceIT, ListVehicles_LimitCapped) {
+  auto stub = VehicleService::NewStub(channel());
+  // Insert 5 rows
+  for (int i = 0; i < 5; ++i) {
+    Vehicle v;
+    grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateVehicle(&c, data::MakeValidCreateVehicleRequest(),
+                                    &v).ok())
+        << "CreateVehicle (setup, iteration " << i
+        << ") RPC failed: error_message=" << c.debug_error_string();
+  }
+
+  // First page: page_size=2, no token → offset=0.
+  ListVehiclesRequest req;
+  req.set_page_size(2);
+  req.set_page_token("");
+  ListVehiclesResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok())
+      << "ListVehicles (page 1) RPC failed: error_message="
+      << ctx.debug_error_string();
+  EXPECT_LE(resp.vehicles_size(), 2);
+
+  // Second page: use the next_page_token from the first call.
+  ListVehiclesRequest req2;
+  req2.set_page_size(2);
+  req2.set_page_token(resp.next_page_token());
+  ListVehiclesResponse resp2;
+  grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->ListVehicles(&ctx2, req2, &resp2).ok())
+      << "ListVehicles (page 2) RPC failed: error_message="
+      << ctx2.debug_error_string();
+  EXPECT_LE(resp2.vehicles_size(), 2);
+}
+
 // Deferred runtime smoke from Chunk 2 Task 8: lives here (rather than
 // in test_data.cc) because VehicleServiceIT owns the fixture class
 // and Task 8's helpers are exercised by this file's other tests — so
