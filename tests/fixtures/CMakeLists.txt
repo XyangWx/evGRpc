@@ -3,6 +3,7 @@
 add_library(evgrpc_test_fixtures STATIC
   jwt_test_keys.cc
   pg_container.cc
+  shared_pg.cc
   test_server.cc
 )
 # Expose the generated/ header dir to consumers.
@@ -29,6 +30,14 @@ target_link_libraries(evgrpc_test_fixtures PUBLIC
   protobuf::libprotobuf
   libpqxx::pqxx
   Threads::Threads
+  gtest               # SharedPgEnvironment derives from ::testing::Environment
+)
+# Absolute path to sql/001_initial.sql, baked at compile time so
+# SharedPgEnvironment::SetUp doesn't depend on CWD (tests run from
+# cmake-build-debug/). Made PUBLIC so consumers of evgrpc_test_fixtures
+# see the same definition when they include shared_pg.h.
+target_compile_definitions(evgrpc_test_fixtures PUBLIC
+  EVGRPC_TEST_SQL_PATH="${CMAKE_SOURCE_DIR}/sql/001_initial.sql"
 )
 # PG container + httplib need C++20 (matches our top-level).
 target_compile_features(evgrpc_test_fixtures PUBLIC cxx_std_20)
