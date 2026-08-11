@@ -242,4 +242,67 @@ TEST_F(ConsumptionServiceIT, DeleteConsumption_NotFound) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
+// Task 28: ListConsumptions happy path with 3 rows (no pagination).
+// Uses the auto-creating CreateConsumptionId helper in a loop — each
+// iteration also auto-creates a weather row, so total rows in the
+// consumption table = 3. Asserts no pagination token is returned
+// when total rows <= default page_size.
+TEST_F(ConsumptionServiceIT, ListConsumptions_HappyPath_MultipleRows) {
+  const auto vid = data::CreateVehicleId(channel());
+  for (int i = 0; i < 3; ++i) {
+    const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+    EXPECT_FALSE(cid.empty());
+  }
+  auto stub = ConsumptionService::NewStub(channel());
+  ListConsumptionsRequest req;
+  ListConsumptionsResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListConsumptions(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.consumptions_size(), 3);
+  EXPECT_TRUE(resp.next_page_token().empty());
+}
+
+// Task 28: ListConsumptions empty case. No rows in the table (each
+// test runs after TruncateAll in SetUp), so the response is empty
+// and next_page_token is empty.
+TEST_F(ConsumptionServiceIT, ListConsumptions_Empty) {
+  auto stub = ConsumptionService::NewStub(channel());
+  ListConsumptionsRequest req;
+  ListConsumptionsResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListConsumptions(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.consumptions_size(), 0);
+  EXPECT_TRUE(resp.next_page_token().empty());
+}
+
+// Task 28: ListConsumptions pagination — creates 5 rows, asks for
+// page_size=2, asserts first page returns 2 rows + non-empty
+// next_page_token (the `has_more` branch), then asks for the second
+// page with the returned token and asserts another 2 rows come back.
+// Same pattern as ChargingServiceIT.ListChargings_Pagination.
+TEST_F(ConsumptionServiceIT, ListConsumptions_Pagination) {
+  const auto vid = data::CreateVehicleId(channel());
+  for (int i = 0; i < 5; ++i) {
+    const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+    EXPECT_FALSE(cid.empty());
+  }
+  auto stub = ConsumptionService::NewStub(channel());
+  // First page: page_size=2 -> 2 rows + non-empty next_page_token.
+  ListConsumptionsRequest req1;
+  req1.set_page_size(2);
+  ListConsumptionsResponse resp1;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->ListConsumptions(&c1, req1, &resp1).ok());
+  EXPECT_EQ(resp1.consumptions_size(), 2);
+  EXPECT_FALSE(resp1.next_page_token().empty());
+  // Second page with token.
+  ListConsumptionsRequest req2;
+  req2.set_page_size(2);
+  req2.set_page_token(resp1.next_page_token());
+  ListConsumptionsResponse resp2;
+  grpc::ClientContext c2;
+  ASSERT_TRUE(stub->ListConsumptions(&c2, req2, &resp2).ok());
+  EXPECT_EQ(resp2.consumptions_size(), 2);
+}
+
 }  // namespace evgrpc::test
