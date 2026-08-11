@@ -504,7 +504,18 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 **Files:**
 - Create: `tests/integration/test_data.h`
 - Create: `tests/integration/test_data.cc`
-- Modify: `tests/integration/CMakeLists.txt`
+- **NO** modify to `tests/integration/CMakeLists.txt` at Task 5 (intentional — see "Dead-code note" below)
+
+**Dead-code note (caught by implementer at commit `48c25ea`, fix applied at `8aaf260`):** `SeedVehicleDataForDisplay` calls `CreateSourceCategoryId`, `CreateChargingId`, `CreateConsumptionId` — all of which are forward-declared helpers that only get defined in later Chunks (3 + 4). Adding `test_data.cc` to `evgrpc_integration_tests`'s CMake target at this point would fail to compile (unresolved symbols). **Decision:** `test_data.cc` is intentionally NOT compiled in Task 5 — it sits in the tree but doesn't enter any build target. The file gets added to the CMake target when Chunks 2-4 land (Chunk 5 Task 31 step 3 also re-affirms this).
+
+**Bug fix applied:** the spec's `CHECK(!cid.empty()) << "..."` line uses an abseil/glog-style macro that doesn't exist in this spdlog-based codebase. Replaced with `if (cid.empty()) throw std::runtime_error("...")` (codebase idiom) at commit `8aaf260`.
+
+**Forward-dependency chain** (resolve in this order):
+1. Chunk 1 Task 5 → this task (file exists, not built)
+2. Chunk 2 Task 8 → `MakeValidCreateVehicleRequest`
+3. Chunk 3 Task 15 → `CreateChargingId` + `CreateSourceCategoryId`
+4. Chunk 4 Task 23 → `CreateConsumptionId`
+5. Chunk 5 Task 31 → add `test_data.cc` to CMake + runtime smoke `TEST_F(DisplayServiceIT, DataHelpers_ProduceValidSetup)`
 
 - [ ] **Step 1: Write `test_data.h`**
 
