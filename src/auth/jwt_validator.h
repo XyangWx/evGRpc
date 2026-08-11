@@ -24,7 +24,9 @@ struct JwtValidator {
   std::string issuer;
   std::string audience;
   std::function<std::optional<std::string>(const std::string& kid)> resolve_key;
-  bool bypass = false;  // NEW
+  // Test-only: when true, Validate() returns synthetic claims without
+  // verifying the token. NEVER set this in production.
+  bool bypass = false;
 
   std::optional<Claims> Validate(const std::string& token) const;
 };
