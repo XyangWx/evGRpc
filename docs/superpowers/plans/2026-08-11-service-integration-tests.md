@@ -2310,7 +2310,7 @@ if (!exists.empty() && !exists[0][0].as<bool>()) {
 
 - [ ] **Step 2: Modify `GetMonthlyReport` (`display_service.cc:107-177`)**
 
-Insert **after** `pqxx::nontransaction tx(*conn);` and any local `MaybeTimestamp` derivations (around line 145–150):
+Insert **after** `pqxx::nontransaction tx(*conn);` (line 125) and before any `pqxx::params p;` / SQL string construction, mirroring Step 1's pattern:
 
 ```cpp
 auto exists = db::Exec(tx,
@@ -2326,7 +2326,7 @@ if (!exists.empty() && !exists[0][0].as<bool>()) {
 
 - [ ] **Step 3: Modify `GetAnnualReport` (`display_service.cc:179-241`)**
 
-Insert **after** `pqxx::nontransaction tx(*conn);` (around line 215):
+Insert **after** `pqxx::nontransaction tx(*conn);` (line 197) and before any `pqxx::params p;` / SQL string construction, mirroring Step 1's pattern:
 
 ```cpp
 auto exists = db::Exec(tx,
@@ -2373,7 +2373,10 @@ namespace evgrpc::test {
 
 class DisplayServiceIT : public ServiceITBase {};
 
-}  // namespace evgrpc::test
+// The closing `}  // namespace evgrpc::test` is added at the END of
+// the file (Task 39 Step 4 commit) — do NOT close the namespace here.
+// All TEST_Fs in Tasks 32-39 must live inside this namespace for
+// `TEST_F(DisplayServiceIT, ...)` and `data::CreateVehicleId(...)` to resolve.
 ```
 
 (Necessary because Task 31 Step 3 below and Tasks 32-39 all use `TEST_F(DisplayServiceIT, ...)`; without this declaration the file won't compile.)
@@ -2395,7 +2398,7 @@ struct TimeRange {
   google::protobuf::Timestamp start;
   google::protobuf::Timestamp end;
 };
-TimeRange DefaultTimeRange();  // 2024-01-01 00:00:00 to 2024-01-31 23:59:59
+TimeRange DefaultTimeRange();  // 2023-01-01 00:00:00 to 2024-01-01 00:00:00 UTC
 
 // Aggregations need data to exist; provide a helper that inserts
 // enough charging + consumption rows for one vehicle to make the
