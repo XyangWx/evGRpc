@@ -833,9 +833,10 @@ TEST_F(VehicleServiceIT, DataHelpers_MakeValidVehicleIsValid) {
   EXPECT_TRUE(v.has_purchase_date());
 
   const auto req = data::MakeValidCreateVehicleRequest();
-  EXPECT_FALSE(req.has_id());                          // request omits id
   EXPECT_EQ(req.brand(), "Tesla");
   EXPECT_EQ(req.license_plate().substr(0, 2), "T-");
+  // Note: CreateVehicleRequest has no `id` field — the id field only
+  // appears in Vehicle (the response). Tested via `v.id()` above.
 }
 ```
 
