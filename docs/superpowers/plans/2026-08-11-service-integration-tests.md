@@ -3076,10 +3076,10 @@ If any Task fails verification, **STOP** and surface to the user before continui
 - `SearchWeatherRequest { string prefix, int32 limit }` (response: `repeated Weather matches`)
 - 2 RPCs: `CreateWeather`, `SearchWeather`
 
-### Impl behavior contract (verified from `src/services/source_category_service.cc` and `src/services/weather_service.cc`)
+### Impl behavior contract (verified from `src/services/source_category_service.cc:22-34` and `src/services/weather_service.cc:22-34`)
 
-- **Create**: validates `name` is non-empty (likely `INVALID_ARGUMENT` for empty), inserts row with `NewUuid()` for `Id`.
-- **Search**: LIKE-prefix filter on `Name`. Empty prefix returns all rows (or some default subset). `limit` caps result count.
+- **Create**: no client-side validation. Empty `name` is accepted and stored (DB column is `NOT NULL` so it can be empty string but not NULL). Inserts row with `NewUuid()` for `Id`.
+- **Search**: LIKE-prefix filter on `Name`. Empty prefix returns all rows (or some default subset). `limit <= 0` defaults to 50. `limit > 0` caps result count.
 - **No FK checks** — both services insert/select their own table only.
 
 ---
@@ -3120,7 +3120,14 @@ TEST_F(SourceCategoryServiceIT, CreateSourceCategory_HappyPath) {
 }
 ```
 
-- [ ] **Step 3: Run + commit**
+- [ ] **Step 3: Build + run + commit**
+
+Run:
+```bash
+cmake --build cmake-build-debug --target evgrpc_integration_tests
+cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategoryServiceIT.CreateSourceCategory_*'
+```
+Expected: 1/1 PASS.
 
 ```bash
 git add tests/integration/source_category_service_test.cc tests/integration/CMakeLists.txt
@@ -3187,7 +3194,22 @@ TEST_F(SourceCategoryServiceIT, SearchSourceCategory_LimitCapped) {
 }
 ```
 
-- [ ] **Step 4: Run + commit**
+- [ ] **Step 4: Close namespace + build + run + commit**
+
+Before building, append at the bottom of `tests/integration/source_category_service_test.cc`:
+
+```cpp
+}  // namespace evgrpc::test
+```
+
+(Pattern matches Task 31 Step 1a / Task 39 Step 4 / Task 44 Step 4.)
+
+Run:
+```bash
+cmake --build cmake-build-debug --target evgrpc_integration_tests
+cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategoryServiceIT.SearchSourceCategory_*'
+```
+Expected: 3/3 PASS.
 
 ```bash
 git add tests/integration/source_category_service_test.cc
@@ -3308,7 +3330,7 @@ cd cmake-build-cov && \
        --include '*/src/services/source_category_service.cc' \
        --include '*/src/services/weather_service.cc' \
        --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
-lcov --summary lookup.info 2>&1 | grep -E 'lines|====='
+lcov --summary lookup.info 2>&1 | grep '^lines'
 ```
 Expected: `lines......: 95.0%` or higher across both.
 
