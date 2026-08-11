@@ -131,6 +131,99 @@ TEST_F(VehicleServiceIT, GetVehicle_NotFound) {
       << " — " << st.error_message();
 }
 
+// UpdateVehicle happy-path: create → update → verify the row round-trips
+// with the new field value (brand) and the original id preserved. Mirror
+// of Task 9/10's pattern: real DB write in setup, then exercise the
+// UPDATE-then-RETURNING path end-to-end. All fields are set on the
+// request (not just brand) so the UPDATE actually writes valid data —
+// the production code binds every column, so a missing field would
+// either default to "" / 0 (and breaking a UNIQUE constraint if the
+// default plate happens to collide with another row) or trip a NOT
+// NULL constraint on conversion.
+TEST_F(VehicleServiceIT, UpdateVehicle_HappyPath) {
+  auto stub = VehicleService::NewStub(channel());
+  Vehicle created;
+  grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(),
+                                  &created).ok())
+      << "CreateVehicle (setup) RPC failed: error_message="
+      << ctx1.debug_error_string();
+
+  UpdateVehicleRequest ureq;
+  ureq.set_id(created.id());
+  ureq.set_brand("Renault");
+  ureq.set_calibrated_range_km(created.calibrated_range_km());
+  ureq.set_battery_capacity_kwh(created.battery_capacity_kwh());
+  *ureq.mutable_purchase_date() = created.purchase_date();
+  ureq.set_license_plate(created.license_plate());
+  Vehicle resp;
+  grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->UpdateVehicle(&ctx2, ureq, &resp).ok())
+      << "UpdateVehicle (happy path) RPC failed: error_message="
+      << ctx2.debug_error_string();
+  EXPECT_EQ(resp.brand(), "Renault");
+  EXPECT_EQ(resp.id(), created.id());  // id preserved
+}
+
+// UpdateVehicle NOT_FOUND: a well-formed UUID that was never inserted
+// must return NOT_FOUND (verified in src/services/vehicle_service.cc
+// line ~135 — the UPDATE returns 0 rows when no row matches WHERE
+// Id = $1). Using a zero UUID (rather than FreshUuid) so the test
+// stays deterministic regardless of prior fixture state — the
+// SetUpTestSuite TruncateAll guarantee + the probability that a
+// real UUID is all-zero is effectively zero means we won't collide.
+TEST_F(VehicleServiceIT, UpdateVehicle_NotFound) {
+  auto stub = VehicleService::NewStub(channel());
+  UpdateVehicleRequest ureq;
+  ureq.set_id("00000000-0000-0000-0000-000000000000");
+  ureq.set_brand("Renault");
+  ureq.set_license_plate("NF-1");
+  Vehicle resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->UpdateVehicle(&ctx, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND)
+      << "Expected NOT_FOUND for missing id, got: " << st.error_code()
+      << " — " << st.error_message();
+}
+
+// PG semantic note (verified empirically against the running DB on 2026-08-11):
+// PostgreSQL's `NOT NULL` constraint rejects NULL values but accepts empty
+// strings (""), because "" is a valid non-NULL VARCHAR. The Task 7 spec
+// (Chunk 2 Task 7 §6) assumed empty strings would trigger
+// `pqxx::not_null_violation` and map to INVALID_ARGUMENT, but they don't —
+// the UPDATE succeeds and the row is stored with LicensePlate="". This
+// test therefore asserts the actual current behavior (the empty-plate row
+// is updated and round-tripped). If we later add app-level validation
+// (or a CHECK constraint like `CHECK (length(LicensePlate) > 0)`), this
+// test will start failing and force the change to be documented.
+// Mirrors the CreateVehicle_EmptyLicensePlate_Accepted regression-guard
+// from Task 9 (commit `123cc2a` + plan fix `1ec50b3`).
+TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_Accepted) {
+  auto stub = VehicleService::NewStub(channel());
+  Vehicle created;
+  grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(),
+                                  &created).ok())
+      << "CreateVehicle (setup) RPC failed: error_message="
+      << ctx1.debug_error_string();
+
+  UpdateVehicleRequest ureq;
+  ureq.set_id(created.id());
+  ureq.set_brand("Renault");
+  ureq.set_calibrated_range_km(created.calibrated_range_km());
+  ureq.set_battery_capacity_kwh(created.battery_capacity_kwh());
+  *ureq.mutable_purchase_date() = created.purchase_date();
+  ureq.set_license_plate("");  // empty string — see comment above
+  Vehicle resp;
+  grpc::ClientContext ctx2;
+  grpc::Status st = stub->UpdateVehicle(&ctx2, ureq, &resp);
+  EXPECT_TRUE(st.ok())
+      << "Expected OK (PG NOT NULL does NOT reject empty strings), got: "
+      << st.error_code() << " — " << st.error_message();
+  // Belt-and-braces: the row should round-trip with license_plate="" intact.
+  EXPECT_EQ(resp.license_plate(), "");
+}
+
 // Deferred runtime smoke from Chunk 2 Task 8: lives here (rather than
 // in test_data.cc) because VehicleServiceIT owns the fixture class
 // and Task 8's helpers are exercised by this file's other tests — so
