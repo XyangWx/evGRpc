@@ -61,7 +61,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
     // the filter matches zero rows (the case Chunk 5 spec promises).
     auto exists = db::Exec(tx,
         "SELECT EXISTS(SELECT 1 FROM charging "
-        "WHERE ($1 = '' OR VehicleId = $1) "
+        "WHERE (length($1) = 0 OR VehicleId::text = $1) "
         "AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
         "AND ($3::TIMESTAMP IS NULL OR StartTime <= $3)) AS has_data",
         "DisplayService.GetVehicleCostSummary.exists",
@@ -82,11 +82,11 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
         "    AND ($2::TIMESTAMP IS NULL OR c.StartTime >= $2) "
         "    AND ($3::TIMESTAMP IS NULL OR c.StartTime <= $3)"
         "), k AS ("
-        "  SELECT COALESCE(SUM(end_mileage - begin_mileage), 0)::DOUBLE PRECISION AS total_km "
+        "  SELECT COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "  FROM consumption "
         "  WHERE VehicleId = $1 "
-        "    AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3)"
+        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3)"
         ") "
         "SELECT c.total_cost, c.total_kwh, k.total_km FROM c, k",
         "DisplayService.GetVehicleCostSummary",
@@ -147,7 +147,7 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
     auto exists = db::Exec(tx,
         "SELECT EXISTS(SELECT 1 FROM charging "
         "WHERE EXTRACT(YEAR FROM StartTime) = $1 AND EXTRACT(MONTH FROM StartTime) = $2 "
-        "AND ($3 = '' OR VehicleId = $3)) AS has_data",
+        "AND (length($3) = 0 OR VehicleId::text = $3)) AS has_data",
         "DisplayService.GetMonthlyReport.exists",
         req->year(), req->month(), req->vehicle_id());
     if (!exists.empty() && !exists[0][0].as<bool>()) {
@@ -181,9 +181,9 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND c.VehicleId = $3"))
         + "), 0)::DOUBLE PRECISION AS total_kwh, "
-        "  COALESCE((SELECT SUM(end_mileage - begin_mileage) FROM consumption "
-        "            WHERE EXTRACT(YEAR FROM \"Start\") = $1 "
-        "              AND EXTRACT(MONTH FROM \"Start\") = $2"
+        "  COALESCE((SELECT SUM(EndMileage - BeginMileage) FROM consumption "
+        "            WHERE EXTRACT(YEAR FROM Start) = $1 "
+        "              AND EXTRACT(MONTH FROM Start) = $2"
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND VehicleId = $3"))
         + "), 0)::DOUBLE PRECISION AS total_km";
@@ -232,7 +232,7 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
     auto exists = db::Exec(tx,
         "SELECT EXISTS(SELECT 1 FROM charging "
         "WHERE EXTRACT(YEAR FROM StartTime) = $1 "
-        "AND ($2 = '' OR VehicleId = $2)) AS has_data",
+        "AND (length($2) = 0 OR VehicleId::text = $2)) AS has_data",
         "DisplayService.GetAnnualReport.exists",
         req->year(), req->vehicle_id());
     if (!exists.empty() && !exists[0][0].as<bool>()) {
@@ -259,8 +259,8 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND c.VehicleId = $2"))
         + "), 0)::DOUBLE PRECISION AS total_kwh, "
-        "  COALESCE((SELECT SUM(end_mileage - begin_mileage) FROM consumption "
-        "            WHERE EXTRACT(YEAR FROM \"Start\") = $1"
+        "  COALESCE((SELECT SUM(EndMileage - BeginMileage) FROM consumption "
+        "            WHERE EXTRACT(YEAR FROM Start) = $1"
         + (req->vehicle_id().empty() ? std::string{}
                                      : std::string(" AND VehicleId = $2"))
         + "), 0)::DOUBLE PRECISION AS total_km";
@@ -424,11 +424,11 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
     // Per-vehicle totals from consumption.
     auto km_rows = db::Exec(tx,
         "SELECT VehicleId, "
-        "       COALESCE(SUM(end_mileage - begin_mileage), 0)::DOUBLE PRECISION AS total_km "
+        "       COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "FROM consumption "
         "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
-        "  AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
-        "  AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
+        "  AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
+        "  AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
         "GROUP BY VehicleId",
         "DisplayService.GetConsumptionEfficiency",
         req->vehicle_id().empty() ? std::optional<std::string>{}
@@ -518,8 +518,8 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
         "  SELECT VehicleId, SUM(EndMileage - BeginMileage) AS actual_mileage "
         "  FROM consumption "
         "  WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR \"Start\" >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR \"Start\" <= $3) "
+        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
         "  GROUP BY VehicleId"
         ") m ON d.VehicleId = m.VehicleId",
         "DisplayService.GetRangeAccuracy",
@@ -587,13 +587,13 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
         "      SELECT SUM(ch.KwhCharged) "
         "      FROM charging ch "
         "      WHERE ch.VehicleId = c.VehicleId "
-        "        AND ch.StartTime >= c.\"Start\" - INTERVAL '24 hours' "
+        "        AND ch.StartTime >= c.Start - INTERVAL '24 hours' "
         "        AND ch.StartTime <= c.\"EndTime\""
         "    ), 0)::DOUBLE PRECISION AS kwh "
         "  FROM consumption c "
         "  WHERE ($1::TEXT IS NULL OR c.VehicleId = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR c.\"Start\" >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR c.\"Start\" <= $3) "
+        "    AND ($2::TIMESTAMP IS NULL OR c.Start >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR c.Start <= $3) "
         "    AND (c.EndMileage - c.BeginMileage) > 0"
         ") "
         "SELECT "
