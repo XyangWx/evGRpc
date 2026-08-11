@@ -1248,7 +1248,7 @@ UpdateChargingRequest ToUpdateChargingRequest(const CreateChargingRequest& src) 
 // In tests/integration/charging_service_test.cc, file scope (above the
 // first TEST_F), with the other TEST_F's inheriting from ServiceITBase.
 TEST_F(ChargingServiceIT, DataHelpers_ProduceValidIds) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   EXPECT_FALSE(vid.empty());
@@ -1285,7 +1285,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 class ChargingServiceIT : public ServiceITBase {};
 
 TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1302,7 +1302,7 @@ TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto sid = data::CreateSourceCategoryId(channel);  // real
   auto stub = ChargingService::NewStub(channel);
   auto req = data::MakeValidCreateChargingRequest(
@@ -1318,7 +1318,7 @@ TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
 
 ```cpp
 TEST_F(ChargingServiceIT, CreateCharging_NonPositiveKwh_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1348,7 +1348,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   const auto cid = data::CreateChargingId(channel, vid, sid);
@@ -1364,7 +1364,7 @@ TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, GetCharging_NotFound) {
-  auto stub = ChargingService::NewStub(ServiceITBase::channel());
+  auto stub = ChargingService::NewStub(channel());
   GetChargingRequest req; req.set_id("00000000-0000-0000-0000-000000000000");
   Charging got; grpc::ClientContext ctx;
   grpc::Status st = stub->GetCharging(&ctx, req, &got);
@@ -1387,7 +1387,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1411,7 +1411,7 @@ TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1431,7 +1431,7 @@ TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1467,7 +1467,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   const auto cid = data::CreateChargingId(channel, vid, sid);
@@ -1487,7 +1487,7 @@ TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_NotFound) {
-  auto stub = ChargingService::NewStub(ServiceITBase::channel());
+  auto stub = ChargingService::NewStub(channel());
   DeleteChargingRequest dreq; dreq.set_id("00000000-0000-0000-0000-000000000000");
   google::protobuf::Empty resp; grpc::ClientContext ctx;
   grpc::Status st = stub->DeleteCharging(&ctx, dreq, &resp);
@@ -1510,7 +1510,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   for (int i = 0; i < 3; ++i) {
@@ -1532,7 +1532,7 @@ TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_Empty) {
-  auto stub = ChargingService::NewStub(ServiceITBase::channel());
+  auto stub = ChargingService::NewStub(channel());
   ListChargingsRequest req;
   ListChargingsResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
@@ -1545,7 +1545,7 @@ TEST_F(ChargingServiceIT, ListChargings_Empty) {
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_Pagination) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   for (int i = 0; i < 5; ++i) {
@@ -1620,7 +1620,7 @@ If `lcov --summary charging.info` reports < 95%, add the cases below:
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_FilterByVehicleId) {
-  auto channel = ServiceITBase::channel();
+  auto channel = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   // Create 3 chargings on this vehicle + 1 on a different vehicle
