@@ -3120,19 +3120,11 @@ TEST_F(SourceCategoryServiceIT, CreateSourceCategory_HappyPath) {
 }
 ```
 
-- [ ] **Step 3: Build + run + commit**
+- [ ] **Step 3: Visual check (no build yet — namespace not yet closed)**
 
-Run:
-```bash
-cmake --build cmake-build-debug --target evgrpc_integration_tests
-cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategoryServiceIT.CreateSourceCategory_*'
-```
-Expected: 1/1 PASS.
+The file is intentionally not built at this step because the namespace block (opened in Step 1) is still open. Adding the closing brace happens at Task 43 Step 4 (alongside the 3 more TEST_Fs and the build). **No commit at this step.**
 
-```bash
-git add tests/integration/source_category_service_test.cc tests/integration/CMakeLists.txt
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(source_category): CreateSourceCategory — happy"
-```
+Visual check: the file should contain `namespace evgrpc::test { class SourceCategoryServiceIT : public ServiceITBase {};` followed by 1 `TEST_F(...)` body. The file should NOT have a closing `}` yet.
 
 ---
 
@@ -3194,9 +3186,9 @@ TEST_F(SourceCategoryServiceIT, SearchSourceCategory_LimitCapped) {
 }
 ```
 
-- [ ] **Step 4: Close namespace + build + run + commit**
+- [ ] **Step 4: Close namespace + build + run + commit (covers Tasks 42 + 43)**
 
-Before building, append at the bottom of `tests/integration/source_category_service_test.cc`:
+Append at the bottom of `tests/integration/source_category_service_test.cc`:
 
 ```cpp
 }  // namespace evgrpc::test
@@ -3207,13 +3199,13 @@ Before building, append at the bottom of `tests/integration/source_category_serv
 Run:
 ```bash
 cmake --build cmake-build-debug --target evgrpc_integration_tests
-cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategoryServiceIT.SearchSourceCategory_*'
+cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategoryServiceIT.*'
 ```
-Expected: 3/3 PASS.
+Expected: 4/4 PASS (1 from Task 42 + 3 from Task 43).
 
 ```bash
-git add tests/integration/source_category_service_test.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(source_category): SearchSourceCategory — happy + empty + limit-capped"
+git add tests/integration/source_category_service_test.cc tests/integration/CMakeLists.txt
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(source_category): CreateSourceCategory + SearchSourceCategory — happy + empty + limit-capped"
 ```
 
 ---
@@ -3352,9 +3344,10 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 ### End of Chunk 6
 
 After Chunk 6 lands:
-- `evgrpc_integration_tests` has 8 SourceCategory+Weather cases (4 RPCs × ~2 cases each), all green.
+- `evgrpc_integration_tests` has 8 cases (2 RPCs × 4 each: CreateSourceCategory + 3 SearchSourceCategory + CreateWeather + 3 SearchWeather), all green.
 - `source_category_service.cc` + `weather_service.cc` coverage ≥ 95%.
 - `data::FreshUuid()` helper confirmed working across Chunks 1-6.
+- Tasks 42 + 43 share a single commit (namespace close only at Task 43 Step 4); Tasks 44 + 45 also share a single commit.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
 
