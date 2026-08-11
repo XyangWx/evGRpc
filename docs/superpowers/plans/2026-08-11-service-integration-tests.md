@@ -625,88 +625,216 @@ If any Chunk 1 task fails verification, **STOP** and surface to the user before 
 
 ## Chunk 2: VehicleService
 
-13 cases for the 5 VehicleService RPCs (CreateVehicle × 3, GetVehicle × 2, UpdateVehicle × 3, DeleteVehicle × 2, ListVehicles × 3). Builds on Chunk 1's `ServiceITBase` and `data::MakeValidVehicle`.
+15 cases across 6 Tasks: 1 precursor + 5 RPCs (CreateVehicle ×3, GetVehicle ×2, UpdateVehicle ×3, DeleteVehicle ×2, ListVehicles ×3) + 1 coverage verification. Builds on Chunk 1's `ServiceITBase`. Adds `data::MakeValidCreateVehicleRequest()` (note: returns `CreateVehicleRequest`, **not** `Vehicle`) and a precursor production-code change in `src/db/error.cc`.
 
-**Files:**
-- Create: `tests/integration/vehicle_service_test.cc`
-- Modify: `tests/integration/test_data.h/.cc` (add per-service request/response helpers as needed by tests)
-- Modify: `tests/integration/CMakeLists.txt` (add `vehicle_service_test.cc` to `evgrpc_integration_tests`)
+### Proto field reference (verified ground truth)
+
+`proto/evgrpc/vehicle.proto`:
+- `Vehicle { id, brand, calibrated_range_km, battery_capacity_kwh, purchase_date, license_plate }` (response)
+- `CreateVehicleRequest { brand, calibrated_range_km, battery_capacity_kwh, purchase_date, license_plate }` (request — no id; different type from Vehicle)
+- `GetVehicleRequest { id }`
+- `UpdateVehicleRequest { id, brand, calibrated_range_km, battery_capacity_kwh, purchase_date, license_plate }` (fields flat — **no** `mutable_vehicle()`)
+- `DeleteVehicleRequest { id }` (response is `google.protobuf.Empty`)
+- `ListVehiclesRequest { page_size, page_token }` (response is `ListVehiclesResponse { repeated vehicles, next_page_token }`)
 
 ---
 
-### Task 7: `CreateVehicle` (3 cases)
+### Task 7 (precursor): Map `not_null_violation` → `INVALID_ARGUMENT` in `src/db/error.cc`
 
-- [ ] **Step 1: Write the failing happy-path test**
+**Why this is first:** Empty-license-plate cases (Create + Update) hit the DB `NOT NULL` constraint, which throws pqxx `not_null_violation`. Current `ToGrpcStatus` falls through to `sql_error` → `INTERNAL`. Tests expecting `INVALID_ARGUMENT` will fail. Fix this once at the error-mapping layer so all services get consistent behavior.
+
+**Files:**
+- Modify: `src/db/error.cc:5-22`
+- Modify: `tests/unit/test_error.cc` (add not_null_violation test)
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/unit/test_error.cc`:
 
 ```cpp
-// tests/integration/vehicle_service_test.cc
-#include "tests/integration/service_test_fixtures.h"
-#include "tests/integration/test_data.h"
-#include "evgrpc/vehicle.grpc.pb.h"
+#include <pqxx/pqxx>
 
-namespace evgrpc::test {
-
-class VehicleServiceIT : public ServiceITBase {};
-
-TEST_F(VehicleServiceIT, CreateVehicle_HappyPath) {
-  auto stub = VehicleService::NewStub(channel());
-  const auto v = data::MakeValidVehicle();
-  Vehicle resp;
-  grpc::ClientContext ctx;
-  EXPECT_TRUE(stub->CreateVehicle(&ctx, v, &resp).ok());
-  EXPECT_FALSE(resp.id().empty());
-  EXPECT_EQ(resp.id().size(), 36u);
-  EXPECT_EQ(resp.license_plate(), v.license_plate());
+TEST(ToGrpcStatus, NotNullViolationMapsToInvalidArgument) {
+  // Construct a not_null_violation by triggering a NOT NULL insert
+  // against an in-memory table requires a real connection, so use the
+  // typed-throw path: catch a synthetic exception via the type hierarchy.
+  // Simplest reliable reproduction: use a fake exception type that
+  // pqxx will dispatch through the correct hierarchy.
+  pqxx::not_null_violation e("null value in column \"x\" violates not-null constraint",
+                             "23502");
+  grpc::Status st = evgrpc::ToGrpcStatus(e);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 ```
 
-- [ ] **Step 2: Run — expect PASS (the implementation already exists)**
+- [ ] **Step 2: Run — expect FAIL**
 
-Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=VehicleServiceIT.CreateVehicle_HappyPath`
-Expected: PASS (this is the "create before asserting" TDD discipline: the impl is already in `vehicle_service.cc`; we're just adding the missing test).
+Run: `cmake --build cmake-build-debug --target evgrpc_tests && cmake-build-debug/tests/evgrpc_tests --gtest_filter=ToGrpcStatus.NotNullViolationMapsToInvalidArgument`
+Expected: FAIL with `actual: 13 (INTERNAL)` vs expected `INVALID_ARGUMENT`.
 
-- [ ] **Step 3: Add the duplicate-license-plate ALREADY_EXISTS case**
+- [ ] **Step 3: Add mapping to `src/db/error.cc`**
+
+```cpp
+grpc::Status ToGrpcStatus(const std::exception& e) {
+    if (dynamic_cast<const pqxx::unique_violation*>(&e)) {
+        return {grpc::StatusCode::ALREADY_EXISTS, e.what()};
+    }
+    if (dynamic_cast<const pqxx::foreign_key_violation*>(&e) ||
+        dynamic_cast<const pqxx::not_null_violation*>(&e)) {  // NEW
+        return {grpc::StatusCode::INVALID_ARGUMENT, e.what()};
+    }
+    if (dynamic_cast<const pqxx::data_exception*>(&e)) {
+        return {grpc::StatusCode::INVALID_ARGUMENT, e.what()};
+    }
+    if (dynamic_cast<const pqxx::sql_error*>(&e)) {
+        return {grpc::StatusCode::INTERNAL, e.what()};
+    }
+    return {grpc::StatusCode::INTERNAL, e.what()};
+}
+```
+
+- [ ] **Step 4: Run — expect PASS, then run full test suite for regressions**
+
+Run:
+```bash
+cmake-build-debug/tests/evgrpc_tests --gtest_filter=ToGrpcStatus.*
+cmake --build cmake-build-debug && cd cmake-build-debug && \
+  EVGRPC_TEST_DATABASE_URL='postgresql://vegrpc_admin:***@127.0.0.1:5432/evgrpc' \
+  DATABASE_URL="$EVGRPC_TEST_DATABASE_URL" ctest
+```
+Expected: PASS; no regressions (mapping change is additive — only adds a class to the `INVALID_ARGUMENT` branch).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/db/error.cc tests/unit/test_error.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "fix(db): map not_null_violation to INVALID_ARGUMENT (was INTERNAL)"
+```
+
+---
+
+### Task 8: Update `test_data` helper to also return `CreateVehicleRequest`
+
+**Files:**
+- Modify: `tests/integration/test_data.h`
+- Modify: `tests/integration/test_data.cc`
+
+- [ ] **Step 1: Add `MakeValidCreateVehicleRequest()` declaration**
+
+In `tests/integration/test_data.h`, alongside `MakeValidVehicle`:
+
+```cpp
+#include "evgrpc/vehicle.pb.h"  // CreateVehicleRequest
+// ...
+namespace evgrpc::test::data {
+
+Vehicle MakeValidVehicle(std::string plate = "");
+CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate = "");
+
+}
+```
+
+- [ ] **Step 2: Implement in `test_data.cc`**
+
+```cpp
+CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
+  CreateVehicleRequest req;
+  req.set_brand("Tesla");
+  req.set_calibrated_range_km(500);
+  req.set_battery_capacity_kwh(75.0);
+  google::protobuf::Timestamp ts;
+  ts.set_seconds(1700000000);
+  *req.mutable_purchase_date() = ts;
+  req.set_license_plate(plate.empty() ? FreshLicensePlate() : plate);
+  return req;
+}
+```
+
+- [ ] **Step 3: Add runtime smoke (extending the Chunk 1 smoke test)**
+
+```cpp
+TEST(TestData, MakeValidCreateVehicleRequestIsValid) {
+  const auto req = data::MakeValidCreateVehicleRequest();
+  EXPECT_EQ(req.brand(), "Tesla");
+  EXPECT_GT(req.calibrated_range_km(), 0);
+  EXPECT_GT(req.battery_capacity_kwh(), 0.0);
+  EXPECT_TRUE(req.has_purchase_date());
+  EXPECT_EQ(req.license_plate().substr(0, 2), "T-");
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=TestData.MakeValidCreateVehicleRequestIsValid`
+Expected: PASS.
+
+```bash
+git add tests/integration/test_data.h tests/integration/test_data.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): MakeValidCreateVehicleRequest helper"
+```
+
+---
+
+### Task 9: `CreateVehicle` (3 cases)
+
+**Files:**
+- Create: `tests/integration/vehicle_service_test.cc`
+- Modify: `tests/integration/CMakeLists.txt` (add `vehicle_service_test.cc`)
+
+- [ ] **Step 1: Write happy-path test (uses MakeValidCreateVehicleRequest, not Vehicle)**
+
+```cpp
+TEST_F(VehicleServiceIT, CreateVehicle_HappyPath) {
+  auto stub = VehicleService::NewStub(channel());
+  const auto req = data::MakeValidCreateVehicleRequest();
+  Vehicle resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.id().empty());
+  EXPECT_EQ(resp.id().size(), 36u);
+  EXPECT_EQ(resp.license_plate(), req.license_plate());
+}
+```
+
+- [ ] **Step 2: Add duplicate-license-plate ALREADY_EXISTS case**
 
 ```cpp
 TEST_F(VehicleServiceIT, CreateVehicle_DuplicateLicensePlate_Conflict) {
   auto stub = VehicleService::NewStub(channel());
   const std::string plate = "DUP-" + data::FreshUuid().substr(0, 4);
-  const auto v1 = data::MakeValidVehicle(plate);
   Vehicle r1; grpc::ClientContext ctx1;
-  ASSERT_TRUE(stub->CreateVehicle(&ctx1, v1, &r1).ok());
-  const auto v2 = data::MakeValidVehicle(plate);  // same plate
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(plate), &r1).ok());
   Vehicle r2; grpc::ClientContext ctx2;
-  grpc::Status st = stub->CreateVehicle(&ctx2, v2, &r2);
+  grpc::Status st = stub->CreateVehicle(&ctx2, data::MakeValidCreateVehicleRequest(plate), &r2);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::ALREADY_EXISTS);
 }
 ```
 
-- [ ] **Step 4: Add the empty-license-plate INVALID_ARGUMENT case**
+- [ ] **Step 3: Add empty-license-plate INVALID_ARGUMENT case (relies on Task 7 mapping)**
 
 ```cpp
 TEST_F(VehicleServiceIT, CreateVehicle_EmptyLicensePlate_InvalidArgument) {
   auto stub = VehicleService::NewStub(channel());
-  auto v = data::MakeValidVehicle();
-  v.set_license_plate("");  // NOT NULL constraint at the DB layer
+  auto req = data::MakeValidCreateVehicleRequest();
+  req.set_license_plate("");  // triggers NOT NULL → INVALID_ARGUMENT via Task 7
   Vehicle resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->CreateVehicle(&ctx, v, &resp);
+  grpc::Status st = stub->CreateVehicle(&ctx, req, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 ```
 
-- [ ] **Step 5: Run + commit**
+- [ ] **Step 4: Run + commit**
 
 Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=VehicleServiceIT.CreateVehicle_*`
-Expected: 3/3 PASS.
+Expected: 3/3 PASS (Task 7 mapping makes the empty-plate case work).
 
 ```bash
 git add tests/integration/vehicle_service_test.cc tests/integration/CMakeLists.txt
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): CreateVehicle — happy + duplicate-plate + empty-plate"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): CreateVehicle — happy + duplicate-plate + empty-plate (INVALID_ARGUMENT)"
 ```
 
 ---
 
-### Task 8: `GetVehicle` (2 cases)
+### Task 10: `GetVehicle` (2 cases)
 
 - [ ] **Step 1: Write happy-path test**
 
@@ -714,10 +842,10 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehic
 TEST_F(VehicleServiceIT, GetVehicle_HappyPath) {
   auto stub = VehicleService::NewStub(channel());
   Vehicle created; grpc::ClientContext ctx1;
-  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidVehicle(), &created).ok());
-  GetVehicleRequest req; req.set_id(created.id());
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok());
+  GetVehicleRequest greq; greq.set_id(created.id());
   Vehicle got; grpc::ClientContext ctx2;
-  ASSERT_TRUE(stub->GetVehicle(&ctx2, req, &got).ok());
+  ASSERT_TRUE(stub->GetVehicle(&ctx2, greq, &got).ok());
   EXPECT_EQ(got.id(), created.id());
   EXPECT_EQ(got.license_plate(), created.license_plate());
 }
@@ -747,20 +875,26 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehic
 
 ---
 
-### Task 9: `UpdateVehicle` (3 cases)
+### Task 11: `UpdateVehicle` (3 cases) — field-by-field, no `mutable_vehicle()`
 
-- [ ] **Step 1: Write happy-path test**
+- [ ] **Step 1: Write happy-path test (per-field assignment)**
 
 ```cpp
 TEST_F(VehicleServiceIT, UpdateVehicle_HappyPath) {
   auto stub = VehicleService::NewStub(channel());
-  Vehicle v; grpc::ClientContext ctx1;
-  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidVehicle(), &v).ok());
-  v.set_brand("Renault");
-  UpdateVehicleRequest req; *req.mutable_vehicle() = v;
+  Vehicle created; grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok());
+  UpdateVehicleRequest ureq;
+  ureq.set_id(created.id());
+  ureq.set_brand("Renault");
+  ureq.set_calibrated_range_km(created.calibrated_range_km());
+  ureq.set_battery_capacity_kwh(created.battery_capacity_kwh());
+  *ureq.mutable_purchase_date() = created.purchase_date();
+  ureq.set_license_plate(created.license_plate());
   Vehicle resp; grpc::ClientContext ctx2;
-  ASSERT_TRUE(stub->UpdateVehicle(&ctx2, req, &resp).ok());
+  ASSERT_TRUE(stub->UpdateVehicle(&ctx2, ureq, &resp).ok());
   EXPECT_EQ(resp.brand(), "Renault");
+  EXPECT_EQ(resp.id(), created.id());  // id preserved
 }
 ```
 
@@ -769,21 +903,33 @@ TEST_F(VehicleServiceIT, UpdateVehicle_HappyPath) {
 ```cpp
 TEST_F(VehicleServiceIT, UpdateVehicle_NotFound) {
   auto stub = VehicleService::NewStub(channel());
-  auto v = data::MakeValidVehicle();
-  v.set_id("00000000-0000-0000-0000-000000000000");
-  UpdateVehicleRequest req; *req.mutable_vehicle() = v;
+  UpdateVehicleRequest ureq;
+  ureq.set_id("00000000-0000-0000-0000-000000000000");
+  ureq.set_brand("Renault");
+  ureq.set_license_plate("NF-1");
   Vehicle resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->UpdateVehicle(&ctx, resp, &resp);  // BUG: typo
+  grpc::Status st = stub->UpdateVehicle(&ctx, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 ```
 
-(Reviewer will catch the typo in step 2's `stub->UpdateVehicle(&ctx, resp, &resp)` — should be `req`, not `resp`. Fix before commit.)
-
-- [ ] **Step 3: Add INVALID_ARGUMENT case (empty plate on update)**
+- [ ] **Step 3: Add empty-license-plate INVALID_ARGUMENT case**
 
 ```cpp
 TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_InvalidArgument) {
-  // ... create a vehicle, then update with empty plate, expect INVALID_ARGUMENT
+  auto stub = VehicleService::NewStub(channel());
+  Vehicle created; grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok());
+  UpdateVehicleRequest ureq;
+  ureq.set_id(created.id());
+  ureq.set_brand("Renault");
+  ureq.set_calibrated_range_km(created.calibrated_range_km());
+  ureq.set_battery_capacity_kwh(created.battery_capacity_kwh());
+  *ureq.mutable_purchase_date() = created.purchase_date();
+  ureq.set_license_plate("");  // NOT NULL → INVALID_ARGUMENT via Task 7
+  Vehicle resp; grpc::ClientContext ctx2;
+  grpc::Status st = stub->UpdateVehicle(&ctx2, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 ```
 
@@ -794,27 +940,27 @@ Expected: 3/3 PASS.
 
 ```bash
 git add tests/integration/vehicle_service_test.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): UpdateVehicle — happy + not-found + empty-plate"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): UpdateVehicle — happy + not-found + empty-plate (INVALID_ARGUMENT)"
 ```
 
 ---
 
-### Task 10: `DeleteVehicle` (2 cases)
+### Task 12: `DeleteVehicle` (2 cases)
 
-- [ ] **Step 1: Write happy-path test**
+- [ ] **Step 1: Write happy-path test (with post-condition check via GetVehicle)**
 
 ```cpp
 TEST_F(VehicleServiceIT, DeleteVehicle_HappyPath) {
   auto stub = VehicleService::NewStub(channel());
-  Vehicle v; grpc::ClientContext ctx1;
-  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidVehicle(), &v).ok());
-  DeleteVehicleRequest req; req.set_id(v.id());
-  google::protobuf::Empty resp; grpc::ClientContext ctx2;
-  EXPECT_TRUE(stub->DeleteVehicle(&ctx2, req, &resp).ok());
+  Vehicle created; grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(), &created).ok());
+  DeleteVehicleRequest dreq; dreq.set_id(created.id());
+  google::protobuf::Empty empty_resp; grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->DeleteVehicle(&ctx2, dreq, &empty_resp).ok());
   // Confirm gone
-  GetVehicleRequest greq; greq.set_id(v.id());
-  Vehicle g; grpc::ClientContext ctx3;
-  EXPECT_EQ(stub->GetVehicle(&ctx3, greq, &g).error_code(),
+  GetVehicleRequest greq; greq.set_id(created.id());
+  Vehicle got; grpc::ClientContext ctx3;
+  EXPECT_EQ(stub->GetVehicle(&ctx3, greq, &got).error_code(),
             grpc::StatusCode::NOT_FOUND);
 }
 ```
@@ -824,9 +970,9 @@ TEST_F(VehicleServiceIT, DeleteVehicle_HappyPath) {
 ```cpp
 TEST_F(VehicleServiceIT, DeleteVehicle_NotFound) {
   auto stub = VehicleService::NewStub(channel());
-  DeleteVehicleRequest req; req.set_id("00000000-0000-0000-0000-000000000000");
+  DeleteVehicleRequest dreq; dreq.set_id("00000000-0000-0000-0000-000000000000");
   google::protobuf::Empty resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->DeleteVehicle(&ctx, req, &resp);
+  grpc::Status st = stub->DeleteVehicle(&ctx, dreq, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 ```
@@ -843,26 +989,26 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehic
 
 ---
 
-### Task 11: `ListVehicles` (3 cases)
+### Task 13: `ListVehicles` (3 cases) — pagination covers `has_more` branch
 
-- [ ] **Step 1: Write happy-path test (multiple rows)**
+- [ ] **Step 1: Write happy-path test (3 rows, no pagination)**
 
 ```cpp
 TEST_F(VehicleServiceIT, ListVehicles_HappyPath_MultipleRows) {
   auto stub = VehicleService::NewStub(channel());
-  // Insert 3 vehicles
   for (int i = 0; i < 3; ++i) {
     Vehicle v; grpc::ClientContext c;
-    ASSERT_TRUE(stub->CreateVehicle(&c, data::MakeValidVehicle(), &v).ok());
+    ASSERT_TRUE(stub->CreateVehicle(&c, data::MakeValidCreateVehicleRequest(), &v).ok());
   }
-  ListVehiclesRequest req;
+  ListVehiclesRequest req;  // default page_size=50 → all rows in one page
   ListVehiclesResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok());
   EXPECT_EQ(resp.vehicles_size(), 3);
+  EXPECT_TRUE(resp.next_page_token().empty());  // no more pages
 }
 ```
 
-- [ ] **Step 2: Add empty case (no rows)**
+- [ ] **Step 2: Add empty case**
 
 ```cpp
 TEST_F(VehicleServiceIT, ListVehicles_Empty) {
@@ -871,33 +1017,34 @@ TEST_F(VehicleServiceIT, ListVehicles_Empty) {
   ListVehiclesResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok());
   EXPECT_EQ(resp.vehicles_size(), 0);
+  EXPECT_TRUE(resp.next_page_token().empty());
 }
 ```
 
-- [ ] **Step 3: Add filter case**
+- [ ] **Step 3: Add pagination case (exercises `has_more` branch in `vehicle_service.cc:202`)**
 
 ```cpp
-TEST_F(VehicleServiceIT, ListVehicles_Filtered) {
+TEST_F(VehicleServiceIT, ListVehicles_Pagination) {
   auto stub = VehicleService::NewStub(channel());
-  // Insert 2 with brand "Tesla", 1 with brand "BMW"
-  for (int i = 0; i < 2; ++i) {
-    auto v = data::MakeValidVehicle(); v.set_brand("Tesla");
-    Vehicle resp; grpc::ClientContext c;
-    ASSERT_TRUE(stub->CreateVehicle(&c, v, &resp).ok());
+  // Insert 5 rows
+  for (int i = 0; i < 5; ++i) {
+    Vehicle v; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateVehicle(&c, data::MakeValidCreateVehicleRequest(), &v).ok());
   }
-  { auto v = data::MakeValidVehicle(); v.set_brand("BMW");
-    Vehicle resp; grpc::ClientContext c;
-    ASSERT_TRUE(stub->CreateVehicle(&c, v, &resp).ok()); }
-  // Filter by brand=BMW (if ListVehicles supports filter; if not, skip filter case)
-  ListVehiclesRequest req;
-  if (req.has_brand_filter()) req.set_brand_filter("BMW");
+  // First page: page_size=2 → 2 rows + next_page_token
+  ListVehiclesRequest req; req.set_page_size(2);
   ListVehiclesResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->ListVehicles(&ctx, req, &resp).ok());
-  EXPECT_EQ(resp.vehicles_size(), req.has_brand_filter() ? 1 : 3);
+  EXPECT_EQ(resp.vehicles_size(), 2);
+  EXPECT_FALSE(resp.next_page_token().empty());
+
+  // Second page: use the token → 2 more rows
+  ListVehiclesRequest req2; req2.set_page_size(2); req2.set_page_token(resp.next_page_token());
+  ListVehiclesResponse resp2; grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->ListVehicles(&ctx2, req2, &resp2).ok());
+  EXPECT_EQ(resp2.vehicles_size(), 2);
 }
 ```
-
-(If `ListVehiclesRequest` has no `brand_filter` field, the test degenerates to "3 rows total" — adjust to a real filter that the proto actually exposes.)
 
 - [ ] **Step 4: Run + commit**
 
@@ -906,14 +1053,14 @@ Expected: 3/3 PASS.
 
 ```bash
 git add tests/integration/vehicle_service_test.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): ListVehicles — happy + empty + filtered"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(vehicle): ListVehicles — happy + empty + pagination (covers has_more branch)"
 ```
 
 ---
 
-### Task 12: Verify VehicleService coverage
+### Task 14: Verify VehicleService coverage ≥ 95%
 
-- [ ] **Step 1: Run lcov on just VehicleService cases**
+- [ ] **Step 1: Run lcov filtered to vehicle_service.cc**
 
 ```bash
 cd cmake-build-cov && \
@@ -924,9 +1071,9 @@ lcov --summary vehicle.info 2>&1 | grep -E 'lines|====='
 ```
 Expected: `lines......: 95.0%` or higher on `vehicle_service.cc`.
 
-- [ ] **Step 2: If below 95%, identify uncovered lines and add cases**
+- [ ] **Step 2: If below 95%, identify uncovered lines**
 
-Run: `genhtml vehicle.info --output-directory vehicle_html && grep -c 'class="lineCov"' vehicle_html/src/services/vehicle_service.cc.gcov.html`
+Run: `genhtml vehicle.info --output-directory vehicle_html && grep 'class="lineUncov"' vehicle_html/src/services/vehicle_service.cc.gcov.html | head`
 Expected: 0 uncovered lines (or fewer than 5% of total).
 
 - [ ] **Step 3: Commit coverage verification (no code change unless new tests added)**
@@ -941,13 +1088,11 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 ### End of Chunk 2
 
 After Chunk 2 lands:
-- `evgrpc_integration_tests` has 13 VehicleService cases, all green.
-- `vehicle_service.cc` coverage ≥ 95%.
-- Total runtime for these 13 cases < 11s.
+- `evgrpc_integration_tests` has 13 VehicleService cases (Create 3 + Get 2 + Update 3 + Delete 2 + List 3), all green.
+- `vehicle_service.cc` coverage ≥ 95% (helper Tasks 7–8 + cases Tasks 9–13).
+- 1 production-code change in `src/db/error.cc` (Task 7) consistent across all services.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
-
----
 
 ## Chunk 3: ChargingService
 
