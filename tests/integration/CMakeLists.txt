@@ -24,6 +24,7 @@ add_executable(evgrpc_integration_tests
   service_test_fixtures.cc
   test_data.cc              # data:: helpers (FreshUuid, MakeValid*...)
   vehicle_service_test.cc   # NEW — Chunk 2 Task 9
+  charging_service_test.cc  # NEW — Chunk 3 Task 15 (data:: helpers smoke)
 )
 target_link_libraries(evgrpc_integration_tests PRIVATE
   gtest                # InitGoogleTest / RUN_ALL_TESTS / TEST_F
