@@ -37,3 +37,13 @@ target_include_directories(evgrpc_integration_tests PRIVATE
   ${CMAKE_SOURCE_DIR}
 )
 add_test(NAME evgrpc_integration_tests COMMAND evgrpc_integration_tests)
+
+# Per-target coverage (see top-level CMakeLists.txt for why global fails).
+if(EVGRPC_COVERAGE)
+  foreach(target evgrpc_e2e_tests evgrpc_integration_tests)
+    if(TARGET ${target})
+      target_compile_options(${target} PRIVATE --coverage -O0 -g)
+      target_link_options(${target} PRIVATE --coverage)
+    endif()
+  endforeach()
+endif()

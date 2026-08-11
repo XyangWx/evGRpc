@@ -39,5 +39,10 @@ target_link_libraries(evgrpc_test_fixtures PUBLIC
 target_compile_definitions(evgrpc_test_fixtures PUBLIC
   EVGRPC_TEST_SQL_PATH="${CMAKE_SOURCE_DIR}/sql/001_initial.sql"
 )
+# Per-target coverage (see top-level CMakeLists.txt for why global fails).
+if(EVGRPC_COVERAGE)
+  target_compile_options(evgrpc_test_fixtures PRIVATE --coverage -O0 -g)
+  target_link_options(evgrpc_test_fixtures PRIVATE --coverage)
+endif()
 # PG container + httplib need C++20 (matches our top-level).
 target_compile_features(evgrpc_test_fixtures PUBLIC cxx_std_20)

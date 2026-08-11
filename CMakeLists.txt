@@ -5,11 +5,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Coverage option is declared at top-level for visibility, but the
+# actual flag injection happens per-target in src/CMakeLists.txt and
+# tests/CMakeLists.txt — adding it via add_compile_options globally
+# propagates to FetchContent deps (notably grpc_cpp_plugin) and breaks
+# their link with gcov instrumentation, see spec review at commit
+# `df6b58f` for the failure mode.
 option(EVGRPC_COVERAGE "Enable coverage instrumentation (gcov)" OFF)
-if(EVGRPC_COVERAGE)
-  add_compile_options(--coverage -O0 -g)
-  add_link_options(--coverage)
-endif()
 
 include(cmake/deps.cmake)
 include(cmake/protoc.cmake)
