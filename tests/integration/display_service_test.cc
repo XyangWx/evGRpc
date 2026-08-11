@@ -132,6 +132,38 @@ TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_Internal) {
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
 }
 
+// Task 34: GetAnnualReport happy path. Same Nov-2023 data as Task 33
+// but asks for the full year (no month filter). Asserts year round-
+// trips, month=0 (annual sentinel per spec), and total_cost > 0.
+TEST_F(DisplayServiceIT, GetAnnualReport_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualReportRequest req;
+  req.set_year(2023);
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetAnnualReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.year(), 2023);
+  EXPECT_EQ(resp.month(), 0);  // 0 = annual sentinel
+  EXPECT_GT(resp.total_cost(), 0.0);
+}
+
+// Task 34: GetAnnualReport with future year → no data → INTERNAL.
+TEST_F(DisplayServiceIT, GetAnnualReport_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualReportRequest req;
+  req.set_year(2099);
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetAnnualReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
