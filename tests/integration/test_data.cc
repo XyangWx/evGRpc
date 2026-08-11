@@ -1,5 +1,7 @@
 #include "tests/integration/test_data.h"
 
+#include <stdexcept>
+
 namespace evgrpc::test::data {
 
 TimeRange DefaultTimeRange() {
@@ -21,11 +23,15 @@ void SeedVehicleDataForDisplay(
   const auto sid = CreateSourceCategoryId(channel);
   for (int i = 0; i < n_chargings; ++i) {
     const auto cid = CreateChargingId(channel, vehicle_id, sid);
-    CHECK(!cid.empty()) << "CreateChargingId returned empty";
+    if (cid.empty()) {
+      throw std::runtime_error("SeedVehicleDataForDisplay: CreateChargingId returned empty");
+    }
   }
   for (int i = 0; i < n_consumptions; ++i) {
     const auto cid = CreateConsumptionId(channel, pg, vehicle_id);
-    CHECK(!cid.empty()) << "CreateConsumptionId returned empty";
+    if (cid.empty()) {
+      throw std::runtime_error("SeedVehicleDataForDisplay: CreateConsumptionId returned empty");
+    }
   }
 }
 
