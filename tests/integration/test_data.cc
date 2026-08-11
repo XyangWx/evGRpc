@@ -37,35 +37,12 @@ CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
   return req;
 }
 
-TimeRange DefaultTimeRange() {
-  // Wide range covering any data the helpers (Chunks 3/4) seed.
-  // Chunk 3/4 helpers use start.set_seconds(1700000000) = 2023-11-14.
-  // Use 2023-01-01 to 2024-01-01 so any helper-generated row is included.
-  TimeRange r;
-  r.start.set_seconds(1672531200);   // 2023-01-01 00:00:00 UTC
-  r.end.set_seconds(1704067200);     // 2024-01-01 00:00:00 UTC
-  return r;
-}
-
-void SeedVehicleDataForDisplay(
-    std::shared_ptr<grpc::Channel> channel,
-    std::shared_ptr<PgContainer> pg,
-    const std::string& vehicle_id,
-    int n_chargings,
-    int n_consumptions) {
-  const auto sid = CreateSourceCategoryId(channel);
-  for (int i = 0; i < n_chargings; ++i) {
-    const auto cid = CreateChargingId(channel, vehicle_id, sid);
-    if (cid.empty()) {
-      throw std::runtime_error("SeedVehicleDataForDisplay: CreateChargingId returned empty");
-    }
-  }
-  for (int i = 0; i < n_consumptions; ++i) {
-    const auto cid = CreateConsumptionId(channel, pg, vehicle_id);
-    if (cid.empty()) {
-      throw std::runtime_error("SeedVehicleDataForDisplay: CreateConsumptionId returned empty");
-    }
-  }
-}
+// NOTE: Chunk 5 forward-deps (DefaultTimeRange, SeedVehicleDataForDisplay)
+// were forward-DECLARED in test_data.h but their implementations depend
+// on helpers (CreateSourceCategoryId / CreateChargingId / CreateConsumptionId)
+// that don't exist yet — they're Chunk 3/4/5 deliverables. The bodies
+// live in test_data_display.cc, which is intentionally NOT in the
+// CMake source list for evgrpc_integration_tests yet; it'll be added
+// when Chunk 5 lands and the underlying helpers exist.
 
 }  // namespace evgrpc::test::data
