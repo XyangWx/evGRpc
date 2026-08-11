@@ -2259,9 +2259,640 @@ If any Task fails verification, **STOP** and surface to the user before continui
 
 ## Chunk 5: DisplayService
 
-[Stub — 16-21 cases for 8 RPCs (3 aggregation + 5 standard). Aggregation RPCs require `INTERNAL "no aggregate row"` case.]
+21 cases across 10 Tasks (1 helper-extension + 3 aggregation RPCs + 5 list-style RPCs + 1 coverage + 1 conditional). DisplayService is the most complex service — 8 RPCs with 3 distinct return patterns (single-record aggregation, list-of-aggregates, list-of-records).
+
+### Proto field reference (verified ground truth)
+
+`proto/evgrpc/display.proto`:
+- 3 single-record aggregation responses: `VehicleCostSummary`, `PeriodReport` (×2)
+- 5 list-style responses: `GetCostByChargerTypeResponse` / `GetCostBySourceCategoryResponse` / `GetConsumptionEfficiencyResponse` / `GetRangeAccuracyResponse` / `GetTemperatureConsumptionCorrelationResponse`
+- All request messages: `string vehicle_id` (optional) + `google.protobuf.Timestamp start_time, end_time` (3 of the 5)
+- Monthly/Annual reports: `int32 year`, `int32 month` (monthly only), `string vehicle_id` (optional)
+
+### Impl behavior contract (verified from `src/services/display_service.cc`)
+
+**3 RPCs return `INTERNAL "no aggregate row"` when no data matches** (verified at lines 82, 160, 224):
+- `GetVehicleCostSummary` (line 82)
+- `GetMonthlyReport` (line 160)
+- `GetAnnualReport` (line 224)
+
+**5 RPCs return empty list** when no data matches (no INTERNAL):
+- `GetCostByChargerType`, `GetCostBySourceCategory`, `GetConsumptionEfficiency`, `GetRangeAccuracy`, `GetTemperatureConsumptionCorrelation`
+
+**Validators** (verified at lines 14, 95, 167, etc.): a few of the RPCs reject `INVALID_ARGUMENT` for invalid time ranges (start > end). Most don't validate — they pass to SQL.
+
+**No FK checks** at service level for DisplayService — the queries are aggregate reads only, not writes.
 
 ---
+
+### Task 31: Extend `data::` with time-range helpers + Display helpers
+
+**Files:**
+- Modify: `tests/integration/test_data.h`
+- Modify: `tests/integration/test_data.cc`
+
+- [ ] **Step 1: Add declarations**
+
+In `tests/integration/test_data.h`:
+
+```cpp
+#include "evgrpc/display.pb.h"
+// ...
+
+namespace evgrpc::test::data {
+
+// Time range — Jan 2024 (default), spanning 30 days.
+struct TimeRange {
+  google::protobuf::Timestamp start;
+  google::protobuf::Timestamp end;
+};
+TimeRange DefaultTimeRange();  // 2024-01-01 00:00:00 to 2024-01-31 23:59:59
+
+// Aggregations need data to exist; provide a helper that inserts
+// enough charging + consumption rows for one vehicle to make the
+// aggregations non-empty.
+void SeedVehicleDataForDisplay(
+    std::shared_ptr<grpc::Channel> channel,
+    std::shared_ptr<PgContainer> pg,
+    const std::string& vehicle_id,
+    int n_chargings = 3,
+    int n_consumptions = 3);
+}
+```
+
+- [ ] **Step 2: Implement in `test_data.cc`**
+
+```cpp
+TimeRange DefaultTimeRange() {
+  TimeRange r;
+  r.start.set_seconds(1704067200);   // 2024-01-01 00:00:00 UTC
+  r.end.set_seconds(1706745599);     // 2024-01-31 23:59:59 UTC
+  return r;
+}
+
+void SeedVehicleDataForDisplay(
+    std::shared_ptr<grpc::Channel> channel,
+    std::shared_ptr<PgContainer> pg,
+    const std::string& vehicle_id,
+    int n_chargings,
+    int n_consumptions) {
+  const auto wid = CreateWeatherId(pg);
+  const auto sid = CreateSourceCategoryId(channel);
+  // Insert n_chargings + n_consumptions via gRPC (test-only setup, fast)
+  for (int i = 0; i < n_chargings; ++i) {
+    const auto cid = CreateChargingId(channel, vehicle_id, sid);
+    EXPECT_FALSE(cid.empty());
+  }
+  for (int i = 0; i < n_consumptions; ++i) {
+    const auto cid = CreateConsumptionId(channel, pg, vehicle_id);
+    EXPECT_FALSE(cid.empty());
+  }
+}
+```
+
+- [ ] **Step 3: Add runtime smoke**
+
+```cpp
+TEST_F(DisplayServiceIT, DataHelpers_ProduceValidSetup) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  // Just verify seeds worked (no exception)
+  SUCCEED();
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/test_data.h tests/integration/test_data.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): DisplayService helpers + time-range + SeedVehicleDataForDisplay"
+```
+
+---
+
+### Task 32: `GetVehicleCostSummary` (2 cases) — INTERNAL when no data
+
+- [ ] **Step 1: Write happy-path test (with seeded data)**
+
+```cpp
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  VehicleCostSummary resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetVehicleCostSummary(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.vehicle_id(), vid);
+  EXPECT_GT(resp.total_cost(), 0.0);
+  EXPECT_GT(resp.total_kwh(), 0.0);
+}
+```
+
+- [ ] **Step 2: Write INTERNAL case (no data → "no aggregate row")**
+
+```cpp
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  // Note: do NOT seed data — empty DB
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  VehicleCostSummary resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos)
+      << st.error_message();
+}
+```
+
+- [ ] **Step 3: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc tests/integration/CMakeLists.txt
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetVehicleCostSummary — happy + no-data-INTERNAL"
+```
+
+---
+
+### Task 33: `GetMonthlyReport` (2 cases) — INTERNAL when no data
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetMonthlyReport_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(2024);
+  req.set_month(1);
+  req.set_vehicle_id(vid);  // optional
+  PeriodReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetMonthlyReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.year(), 2024);
+  EXPECT_EQ(resp.month(), 1);
+  EXPECT_GT(resp.total_cost(), 0.0);
+}
+```
+
+- [ ] **Step 2: Write INTERNAL case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(2099);  // future year, no data
+  req.set_month(1);
+  req.set_vehicle_id(vid);
+  PeriodReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
+}
+```
+
+- [ ] **Step 3: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetMonthlyReport — happy + no-data-INTERNAL"
+```
+
+---
+
+### Task 34: `GetAnnualReport` (2 cases) — INTERNAL when no data
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetAnnualReport_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualReportRequest req;
+  req.set_year(2024);
+  req.set_vehicle_id(vid);
+  PeriodReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetAnnualReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.year(), 2024);
+  EXPECT_EQ(resp.month(), 0);  // 0 = annual
+  EXPECT_GT(resp.total_cost(), 0.0);
+}
+```
+
+- [ ] **Step 2: Write INTERNAL case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetAnnualReport_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualReportRequest req;
+  req.set_year(2099);
+  req.set_vehicle_id(vid);
+  PeriodReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetAnnualReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
+}
+```
+
+- [ ] **Step 3: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetAnnualReport — happy + no-data-INTERNAL"
+```
+
+---
+
+### Task 35: `GetCostByChargerType` (3 cases) — empty list, not INTERNAL
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostByChargerType_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.breakdowns_size(), 0);
+  for (const auto& b : resp.breakdowns()) {
+    EXPECT_GT(b.total_cost(), 0.0);
+  }
+}
+```
+
+- [ ] **Step 2: Write empty case (no data → empty list, NOT INTERNAL)**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostByChargerType_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case (vehicle_id filter excludes other vehicles)**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostByChargerType_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid_a);  // filter to vid_a only
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  // Should reflect vid_a only (3 chargings); vid_b's data excluded.
+  // Sum of total_cost from vid_a only.
+  double vid_a_total = 0;
+  for (const auto& b : resp.breakdowns()) vid_a_total += b.total_cost();
+  EXPECT_GT(vid_a_total, 0.0);
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetCostByChargerType — happy + empty + filtered"
+```
+
+---
+
+### Task 36: `GetCostBySourceCategory` (3 cases)
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.breakdowns_size(), 0);
+}
+```
+
+- [ ] **Step 2: Write empty case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  double total = 0;
+  for (const auto& b : resp.breakdowns()) total += b.total_cost();
+  EXPECT_GT(total, 0.0);
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetCostBySourceCategory — happy + empty + filtered"
+```
+
+---
+
+### Task 37: `GetConsumptionEfficiency` (3 cases)
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.efficiencies_size(), 0);
+}
+```
+
+- [ ] **Step 2: Write empty case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.efficiencies_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  for (const auto& e : resp.efficiencies()) {
+    EXPECT_EQ(e.vehicle_id(), vid_a);  // all rows are for vid_a
+  }
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetConsumptionEfficiency — happy + empty + filtered"
+```
+
+---
+
+### Task 38: `GetRangeAccuracy` (3 cases)
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetRangeAccuracy_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.accuracies_size(), 0);
+}
+```
+
+- [ ] **Step 2: Write empty case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetRangeAccuracy_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.accuracies_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetRangeAccuracy_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  for (const auto& a : resp.accuracies()) {
+    EXPECT_EQ(a.vehicle_id(), vid_a);
+  }
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetRangeAccuracy — happy + empty + filtered"
+```
+
+---
+
+### Task 39: `GetTemperatureConsumptionCorrelation` (3 cases)
+
+- [ ] **Step 1: Write happy-path test**
+
+```cpp
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.buckets_size(), 0);
+}
+```
+
+- [ ] **Step 2: Write empty case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.buckets_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case**
+
+```cpp
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  // Buckets don't have vehicle_id field; verify total sample count matches vid_a only
+  int total = 0;
+  for (const auto& b : resp.buckets()) total += b.sample_count();
+  EXPECT_GT(total, 0);
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/display_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): GetTemperatureConsumptionCorrelation — happy + empty + filtered"
+```
+
+---
+
+### Task 40: Verify DisplayService coverage ≥ 95%
+
+- [ ] **Step 1: Run lcov filtered to display_service.cc**
+
+```bash
+cd cmake-build-cov && \
+  lcov --capture --directory . --output-file display.info \
+       --include '*/src/services/display_service.cc' \
+       --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
+lcov --summary display.info 2>&1 | grep -E 'lines|====='
+```
+Expected: `lines......: 95.0%` or higher on `display_service.cc`.
+
+- [ ] **Step 2: If below 95%, identify uncovered lines**
+
+Run: `genhtml display.info --output-directory display_html && grep 'class="lineUncov"' display_html/src/services/display_service.cc.gcov.html | head`
+
+- [ ] **Step 3: Commit coverage verification**
+
+```bash
+git add docs/superpowers/plans/2026-08-11-service-integration-tests.md
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk5): DisplayService coverage verified ≥95%"
+```
+
+---
+
+### Task 41 (conditional): Coverage gap closure — only run if Task 40 shows < 95%
+
+**Why conditional:** DisplayService has 592 LOC, 8 RPCs, 5 list filters — likely missed branches:
+
+1. **Filter branches in 5 list-style RPCs**: `start_time`/`end_time` filters (some RPCs have conditional WHERE clauses).
+2. **Validator branches** (if `start > end` in some RPCs).
+3. **`PeriodReport` total_km / total_kwh aggregation branches** (might have COALESCE / NULL handling).
+
+If coverage < 95%, add:
+
+- [ ] **Step 1: Add 2-3 time-range filter cases** (e.g. narrow window excludes all data → empty)
+- [ ] **Step 2: Add 1 INVALID_ARGUMENT case** if a validator exists
+- [ ] **Step 3: Re-run lcov; expect ≥ 95%**
+- [ ] **Step 4: Commit coverage closure**
+
+---
+
+### End of Chunk 5
+
+After Chunk 5 lands:
+- `evgrpc_integration_tests` has 21 DisplayService cases (3 aggregation × 2 + 5 list × 3 = 6 + 15), all green.
+- `display_service.cc` coverage ≥ 95%.
+- `data::DefaultTimeRange` + `SeedVehicleDataForDisplay` helpers available.
+
+If any Task fails verification, **STOP** and surface to the user before continuing.
 
 ## Chunk 6: SourceCategory + Weather
 
