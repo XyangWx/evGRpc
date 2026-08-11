@@ -139,4 +139,72 @@ TEST_F(ConsumptionServiceIT, GetConsumption_NotFound) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
+// Task 26: UpdateConsumption happy path. Creates a consumption row,
+// then builds a fresh valid template via MakeValidCreateConsumptionRequest,
+// overrides one field (end_mileage_km) to make the update meaningful,
+// converts to UpdateConsumptionRequest via ToUpdateConsumptionRequest,
+// sets id, and asserts the change round-trips in the response.
+TEST_F(ConsumptionServiceIT, UpdateConsumption_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  Consumption created;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateConsumption(
+      &c1, data::MakeValidCreateConsumptionRequest(vid, wid), &created)
+                  .ok());
+  auto template_req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  template_req.set_end_mileage_km(10200);  // the change
+  UpdateConsumptionRequest ureq =
+      data::ToUpdateConsumptionRequest(template_req);
+  ureq.set_id(created.id());
+  Consumption resp;
+  grpc::ClientContext c2;
+  ASSERT_TRUE(stub->UpdateConsumption(&c2, ureq, &resp).ok());
+  EXPECT_EQ(resp.end_mileage_km(), 10200);
+  EXPECT_EQ(resp.id(), created.id());
+}
+
+// Task 26: UpdateConsumption NOT_FOUND. Builds a fully-valid
+// UpdateConsumptionRequest from a fresh valid template + all-zero
+// UUID. The validator passes (template fields are valid), the SQL
+// UPDATE finds 0 rows -> NOT_FOUND. Same pattern as Chunk 3's
+// ChargingServiceIT.UpdateCharging_NotFound.
+TEST_F(ConsumptionServiceIT, UpdateConsumption_NotFound) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  UpdateConsumptionRequest ureq = data::ToUpdateConsumptionRequest(
+      data::MakeValidCreateConsumptionRequest(vid, wid));
+  ureq.set_id("00000000-0000-0000-0000-000000000000");
+  Consumption resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->UpdateConsumption(&ctx, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
+// Task 26: UpdateConsumption with invalid temp ordering. The
+// production validator (re-run inside UpdateConsumption) rejects
+// highest < lowest before the DB round-trip.
+TEST_F(ConsumptionServiceIT, UpdateConsumption_TempValidation_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  Consumption created;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateConsumption(
+      &c1, data::MakeValidCreateConsumptionRequest(vid, wid), &created)
+                  .ok());
+  auto template_req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  template_req.set_highest_temperature_c(0.0);
+  template_req.set_lowest_temperature_c(20.0);
+  UpdateConsumptionRequest ureq =
+      data::ToUpdateConsumptionRequest(template_req);
+  ureq.set_id(created.id());
+  Consumption resp;
+  grpc::ClientContext c2;
+  grpc::Status st = stub->UpdateConsumption(&c2, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
