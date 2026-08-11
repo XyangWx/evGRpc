@@ -207,4 +207,39 @@ TEST_F(ConsumptionServiceIT, UpdateConsumption_TempValidation_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Task 27: DeleteConsumption happy path. Creates a consumption row
+// via the auto-creating helper, deletes it, then re-fetches via
+// GetConsumption to confirm the row is gone (post-condition check
+// via the same channel). Uses google::protobuf::Empty for the
+// Delete response (delete RPCs return Empty, not the deleted row).
+TEST_F(ConsumptionServiceIT, DeleteConsumption_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+  auto stub = ConsumptionService::NewStub(channel());
+  DeleteConsumptionRequest dreq;
+  dreq.set_id(cid);
+  google::protobuf::Empty empty;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->DeleteConsumption(&c1, dreq, &empty).ok());
+  // Post-condition: the row is gone.
+  GetConsumptionRequest greq;
+  greq.set_id(cid);
+  Consumption got;
+  grpc::ClientContext c2;
+  EXPECT_EQ(stub->GetConsumption(&c2, greq, &got).error_code(),
+            grpc::StatusCode::NOT_FOUND);
+}
+
+// Task 27: DeleteConsumption with an all-zero UUID — exercises the
+// NOT_FOUND branch (no row exists, server returns 0 rows from DELETE).
+TEST_F(ConsumptionServiceIT, DeleteConsumption_NotFound) {
+  auto stub = ConsumptionService::NewStub(channel());
+  DeleteConsumptionRequest dreq;
+  dreq.set_id("00000000-0000-0000-0000-000000000000");
+  google::protobuf::Empty resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->DeleteConsumption(&ctx, dreq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
 }  // namespace evgrpc::test
