@@ -57,6 +57,45 @@ TEST_F(DisplayServiceIT, DataHelpers_ProduceValidSetup) {
   EXPECT_EQ(tr.end.seconds(), 1704067200);    // 2024-01-01
 }
 
+// Task 32: GetVehicleCostSummary happy path. Seeds enough
+// charging + consumption for one vehicle via the Display helper, then
+// asks DisplayService for a VehicleCostSummary over the default time
+// range. Asserts vehicle_id round-trips and totals are positive.
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  VehicleCostSummary resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetVehicleCostSummary(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.vehicle_id(), vid);
+  EXPECT_GT(resp.total_cost(), 0.0);
+  EXPECT_GT(resp.total_kwh(), 0.0);
+}
+
+// Task 32: GetVehicleCostSummary with no data → INTERNAL "no aggregate
+// row". The production handler's precursor fix (commit 69d0d85) added
+// an EXISTS pre-check so this branch is reachable.
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  // Note: do NOT seed data — empty DB.
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  VehicleCostSummary resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos)
+      << st.error_message();
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
