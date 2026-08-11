@@ -7,6 +7,11 @@
 namespace evgrpc {
 
 std::optional<Claims> JwtValidator::Validate(const std::string& token) const {
+  if (bypass) {
+    return Claims{ /* subject */ "test-subject",
+                   /* issuer  */ issuer,
+                   /* audience*/ audience };
+  }
   try {
     // 1. Decode (no verification yet) so we can pull `kid` from the header
     //    and resolve the public key. jwt-cpp throws on malformed input.

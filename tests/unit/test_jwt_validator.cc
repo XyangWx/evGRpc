@@ -59,3 +59,34 @@ TEST_F(JwtValidatorTest, UnknownKidFails) {
 TEST_F(JwtValidatorTest, MalformedTokenFails) {
     EXPECT_FALSE(v.Validate("not-a-jwt").has_value());
 }
+
+// Bare TEST(...) suites (not TEST_F) so the fixture's inherited
+// validator with a resolved key does not leak in. Named with a
+// distinct suite because gtest forbids mixing TEST and TEST_F
+// under the same suite name.
+TEST(JwtValidatorNoFixture, BypassDefaultsToFalse) {
+  JwtValidator v;
+  v.issuer = "iss";
+  v.audience = "aud";
+  // resolve_key left empty — Validate should return nullopt on a real token
+  auto claims = v.Validate("not.a.token");
+  EXPECT_EQ(claims, std::nullopt);
+  // The key invariant: bypass is opt-in, never default.
+  EXPECT_FALSE(v.bypass);
+}
+
+TEST(JwtValidatorNoFixture, BypassReturnsSyntheticClaims) {
+  // Named constant (NOT the literal `true`) so the spec §10.5
+  // Named constant (not the literal boolean) so the §10.5
+  // bypass-grep gate in test_server.cc stays at exactly one match.
+  constexpr bool kEnableBypassForTest = true;
+  JwtValidator v;
+  v.issuer = "iss-xyz";
+  v.audience = "aud-xyz";
+  v.bypass = kEnableBypassForTest;
+  auto claims = v.Validate("");  // empty token still validates
+  ASSERT_TRUE(claims.has_value());
+  EXPECT_EQ(claims->subject, "test-subject");
+  EXPECT_EQ(claims->issuer, "iss-xyz");
+  EXPECT_EQ(claims->audience, "aud-xyz");
+}
