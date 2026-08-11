@@ -290,6 +290,55 @@ TEST_F(DisplayServiceIT, GetCostBySourceCategory_Filtered) {
   EXPECT_LT(total_filt, total_unf);
 }
 
+// Task 37: GetConsumptionEfficiency happy path.
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.efficiencies_size(), 0);
+}
+
+// Task 37: GetConsumptionEfficiency empty case.
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.efficiencies_size(), 0);
+}
+
+// Task 37: GetConsumptionEfficiency filtered case — asserts all
+// returned rows have vehicle_id == vid_a (no cross-vehicle leakage).
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetConsumptionEfficiencyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  for (const auto& e : resp.efficiencies()) {
+    EXPECT_EQ(e.vehicle_id(), vid_a);
+  }
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
