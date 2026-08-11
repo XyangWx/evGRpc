@@ -35,10 +35,11 @@ std::string FreshUuid();
 // astronomically unlikely).
 std::string FreshLicensePlate();
 
-// Build a fully-valid Vehicle proto for use as test fixtures /
-// expected-shape comparisons (CreateVehicleRequest == Vehicle fields
-// minus id, so this also works as CreateVehicleRequest input when
-// callers don't need to assert "id was dropped").
+// Build a fully-valid Vehicle proto for expected-shape fixtures (e.g.,
+// comparing server `GetVehicle` response field-by-field). For
+// `CreateVehicle` RPC input, use `MakeValidCreateVehicleRequest()`
+// instead — Vehicle and CreateVehicleRequest are distinct proto types
+// with no implicit conversion.
 Vehicle MakeValidVehicle(std::string plate = "");
 
 // Build a CreateVehicleRequest — Vehicle fields minus the server-set
