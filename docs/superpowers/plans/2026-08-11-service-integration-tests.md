@@ -2287,21 +2287,21 @@ If any Task fails verification, **STOP** and surface to the user before continui
 
 ### Precursor before Task 31: Make `INTERNAL "no aggregate row"` branch reachable in DisplayService aggregation RPCs
 
-**Why this is needed:** The current impl (`src/services/display_service.cc:60-83, 140-160, 207-224`) uses `COALESCE((SELECT SUM(...)), 0)::DOUBLE PRECISION` wrapped in an outer `SELECT ... FROM (VALUES (1)) AS dummy` to always return 1 row. This means `result.empty()` is **never** true, so the `INTERNAL "no aggregate row"` branch (lines 82, 160, 224) is dead code through the public API. The spec §6 promised this branch would fire on empty data; the impl never lets it.
+**Why this is needed:** The current impl (`src/services/display_service.cc:60-83, 140-160, 207-224`) uses CTE CROSS JOIN pattern (`WITH c AS (...) , k AS (...) SELECT c.total_cost, c.total_kwh, k.total_km FROM c, k`) which always returns 1 row even when no data matches. This means `result.empty()` is **never** true, so the `INTERNAL "no aggregate row"` branch (lines 82, 160, 224) is dead code through the public API. The spec §6 promised this branch would fire on empty data; the impl never lets it.
 
 **Fix:** Add an `EXISTS` pre-check at the start of each of the 3 aggregation RPCs that returns `INTERNAL "no aggregate row"` early if no rows match the filter. The aggregation query that follows stays as-is.
 
 - [ ] **Step 1: Modify `GetVehicleCostSummary` (`display_service.cc:36-105`)**
 
-At line ~45 (after auth + scope, before the SELECT), insert:
+Insert **after** `pqxx::nontransaction tx(*conn);` and the `MaybeTimestamp` locals (around line 55–60, after the existing `auto start_ts = MaybeTimestamp(...)` / `auto end_ts = MaybeTimestamp(...)` lines), before the existing aggregation SELECT:
 
 ```cpp
 auto exists = db::Exec(tx,
-    "SELECT EXISTS(SELECT 1 FROM charging WHERE VehicleId = $1 "
-    "AND StartTime >= $2 AND StartTime <= $3) AS has_data",
-    req->vehicle_id(),
-    TimestampString(req->start_time()),
-    TimestampString(req->end_time()));
+    "SELECT EXISTS(SELECT 1 FROM charging "
+    "WHERE ($1 = '' OR VehicleId = $1) "
+    "AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
+    "AND ($3::TIMESTAMP IS NULL OR StartTime <= $3)) AS has_data",
+    req->vehicle_id(), start_ts, end_ts);
 if (!exists.empty() && !exists[0][0].as<bool>()) {
   auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
   scope.set_status(s); return s;
@@ -2310,7 +2310,7 @@ if (!exists.empty() && !exists[0][0].as<bool>()) {
 
 - [ ] **Step 2: Modify `GetMonthlyReport` (`display_service.cc:107-177`)**
 
-Insert after auth + scope:
+Insert **after** `pqxx::nontransaction tx(*conn);` and any local `MaybeTimestamp` derivations (around line 145–150):
 
 ```cpp
 auto exists = db::Exec(tx,
@@ -2326,7 +2326,7 @@ if (!exists.empty() && !exists[0][0].as<bool>()) {
 
 - [ ] **Step 3: Modify `GetAnnualReport` (`display_service.cc:179-241`)**
 
-Insert after auth + scope:
+Insert **after** `pqxx::nontransaction tx(*conn);` (around line 215):
 
 ```cpp
 auto exists = db::Exec(tx,
@@ -2355,8 +2355,28 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "fix(displa
 ### Task 31: Extend `data::` with time-range helpers + Display helpers
 
 **Files:**
+- Create: `tests/integration/display_service_test.cc` (header section)
 - Modify: `tests/integration/test_data.h`
 - Modify: `tests/integration/test_data.cc`
+
+- [ ] **Step 1a: Test file header — include the fixture class declaration as actual code**
+
+In `tests/integration/display_service_test.cc`, at file scope (above the first `TEST_F`):
+
+```cpp
+#include "tests/integration/service_test_fixtures.h"
+#include "tests/integration/test_data.h"
+#include "evgrpc/display.grpc.pb.h"
+#include "evgrpc/display.pb.h"
+
+namespace evgrpc::test {
+
+class DisplayServiceIT : public ServiceITBase {};
+
+}  // namespace evgrpc::test
+```
+
+(Necessary because Task 31 Step 3 below and Tasks 32-39 all use `TEST_F(DisplayServiceIT, ...)`; without this declaration the file won't compile.)
 
 - [ ] **Step 1: Add declarations**
 
@@ -2368,7 +2388,9 @@ In `tests/integration/test_data.h`:
 
 namespace evgrpc::test::data {
 
-// Time range — Jan 2024 (default), spanning 30 days.
+// Time range — covers Nov 2023 (the seeded helper range) with margin.
+// Helpers in Chunks 3/4 use start.set_seconds(1700000000) = 2023-11-14.
+// Default range: 2023-01-01 to 2024-01-01, so any helper-generated row is included.
 struct TimeRange {
   google::protobuf::Timestamp start;
   google::protobuf::Timestamp end;
@@ -2423,9 +2445,11 @@ void SeedVehicleDataForDisplay(
 ```cpp
 TEST_F(DisplayServiceIT, DataHelpers_ProduceValidSetup) {
   const auto vid = data::CreateVehicleId(channel());
+  EXPECT_FALSE(vid.empty());
   data::SeedVehicleDataForDisplay(channel(), pg(), vid);
-  // Just verify seeds worked (no exception)
-  SUCCEED();
+  // Stronger signal: re-create and verify all helpers return non-empty
+  const auto cid = data::CreateChargingId(channel(), vid, data::CreateSourceCategoryId(channel()));
+  EXPECT_FALSE(cid.empty());
 }
 ```
 
@@ -2440,11 +2464,12 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 
 ### Task 32: `GetVehicleCostSummary` (2 cases) — INTERNAL when no data
 
-- [ ] **Step 1: Write happy-path test (with seeded data)** — fixture class declared at file scope
+- [ ] **Step 1: Write happy-path test (with seeded data)**
 
 ```cpp
-// Fixture class declared once at file scope (Chunk 4 Task 24 Step 1 pattern):
+// Fixture class declared at file scope (top of display_service_test.cc):
 //   class DisplayServiceIT : public ServiceITBase {};
+// (Declared in Task 31 Step 1a — see above.)
 
 TEST_F(DisplayServiceIT, GetVehicleCostSummary_HappyPath) {
   const auto vid = data::CreateVehicleId(channel());
@@ -3024,8 +3049,8 @@ If coverage < 95%, add (concrete, ordered by likely impact):
 ### End of Chunk 5
 
 After Chunk 5 lands:
-- `evgrpc_integration_tests` has 21 DisplayService cases (3 aggregation × 2 + 5 list × 3 = 6 + 15), all green.
-- `display_service.cc` coverage ≥ 95%.
+- `evgrpc_integration_tests` has **22 cases** (3 aggregation × 2 + 5 list × 3 + 1 helper smoke = 6 + 15 + 1), all green.
+- `display_service.cc` coverage ≥ 95%; **28-29 cases** total if Task 41 (conditional coverage closure) runs.
 - `data::DefaultTimeRange` + `SeedVehicleDataForDisplay` helpers available.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
