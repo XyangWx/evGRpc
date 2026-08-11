@@ -158,18 +158,16 @@ class BearerTokenPlugin final : public grpc::MetadataCredentialsPlugin {
 class TestServer::Impl {
  public:
   Impl(TestServer::Options opts) {
-    // 1. RSA keypair — generated once, used for all token signing +
-    //    JWKS serving during this fixture's lifetime.
-    keypair_ = GenerateRsaKeyPair("test-kid");
     issuer_ = "https://test-idp";
     audience_ = "evgrpc";
 
     if (opts.no_auth) {
-      // no_auth mode: skip JWKS HTTP server bringup entirely. The
-      // validator runs in bypass (synthetic-claim) mode, so it never
-      // needs to resolve a kid against a JWKS endpoint. jwks_url_ is
-      // left empty; tests that read OauthIssuerUrl()/JwksUrl() under
-      // bypass should not rely on those values.
+      // no_auth mode: skip JWKS HTTP server bringup AND skip the
+      // RSA-2048 keypair generation (50-100 ms on typical CI) since
+      // the validator runs in bypass (synthetic-claim) mode and never
+      // needs to resolve a kid against a JWKS endpoint. keypair_ is
+      // left null; tests that read ts.KeyPair() under bypass should
+      // not rely on its value. jwks_url_ is left empty too.
       validator_.issuer = issuer_;
       validator_.audience = audience_;
       // The one and only place this assignment may appear in the repo
@@ -178,6 +176,10 @@ class TestServer::Impl {
       validator_.bypass = true;
       jwks_disabled_ = true;
     } else {
+      // Auth path: generate RSA keypair for token signing + JWKS serving.
+      // 1. RSA keypair — generated once, used for all token signing +
+      //    JWKS serving during this fixture's lifetime.
+      keypair_ = GenerateRsaKeyPair("test-kid");
       // 2. cpp-httplib HTTP server on a random localhost port.
       //    httplib::Server::bind_to_any_port picks port 0 and resolves
       //    the kernel-assigned port; we capture the returned int.
