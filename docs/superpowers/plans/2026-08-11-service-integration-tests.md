@@ -365,7 +365,23 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 - Create: `tests/integration/service_integration_main.cc`
 - Create: `tests/integration/service_test_fixtures.h`
 - Create: `tests/integration/service_test_fixtures.cc`
-- Modify: `tests/integration/CMakeLists.txt`
+- Modify: `tests/integration/CMakeLists.txt` (add `evgrpc_integration_tests` executable + `target_include_directories(... ${CMAKE_SOURCE_DIR})` per "Build deps" below)
+
+**Build deps (architectural gap caught by implementer at commit `93ad918`):**
+
+The plan's CMake snippet omitted one line that's strictly necessary because of the `service_test_fixtures.cc` include path:
+
+```cpp
+#include "tests/integration/service_test_fixtures.h"  // full-path
+```
+
+`evgrpc_test_fixtures` exposes its include dirs as `${CMAKE_CURRENT_BINARY_DIR}/generated` and `${CMAKE_CURRENT_SOURCE_DIR}/..` (i.e. `tests/`). Neither contains `tests/integration/service_test_fixtures.h`. The full-path include only resolves when `${CMAKE_SOURCE_DIR}` is on the target's include path. Add:
+
+```cmake
+target_include_directories(evgrpc_integration_tests PRIVATE ${CMAKE_SOURCE_DIR})
+```
+
+without which the build fails with `fatal error: tests/integration/service_test_fixtures.h: No such file or directory`.
 
 - [ ] **Step 1: Write `service_test_fixtures.h`**
 
