@@ -339,6 +339,54 @@ TEST_F(DisplayServiceIT, GetConsumptionEfficiency_Filtered) {
   }
 }
 
+// Task 38: GetRangeAccuracy happy path.
+TEST_F(DisplayServiceIT, GetRangeAccuracy_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.accuracies_size(), 0);
+}
+
+// Task 38: GetRangeAccuracy empty case.
+TEST_F(DisplayServiceIT, GetRangeAccuracy_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.accuracies_size(), 0);
+}
+
+// Task 38: GetRangeAccuracy filtered case.
+TEST_F(DisplayServiceIT, GetRangeAccuracy_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetRangeAccuracyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  for (const auto& a : resp.accuracies()) {
+    EXPECT_EQ(a.vehicle_id(), vid_a);
+  }
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
