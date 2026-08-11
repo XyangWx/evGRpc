@@ -2259,7 +2259,7 @@ If any Task fails verification, **STOP** and surface to the user before continui
 
 ## Chunk 5: DisplayService
 
-21 cases across 10 Tasks (1 helper-extension + 3 aggregation RPCs + 5 list-style RPCs + 1 coverage + 1 conditional). DisplayService is the most complex service — 8 RPCs with 3 distinct return patterns (single-record aggregation, list-of-aggregates, list-of-records).
+**22 cases across 11 Tasks** (1 impl-fix precursor + 1 helper-extension + 3 aggregation RPCs + 5 list-style RPCs + 1 coverage + 1 conditional). DisplayService is the most complex service — 8 RPCs with 3 distinct return patterns (single-record aggregation, list-of-aggregates, list-of-records). Case-count math: 6 (3 aggregation × 2) + 15 (5 list × 3) + 1 smoke = 22.
 
 ### Proto field reference (verified ground truth)
 
@@ -2282,6 +2282,73 @@ If any Task fails verification, **STOP** and surface to the user before continui
 **Validators** (verified at lines 14, 95, 167, etc.): a few of the RPCs reject `INVALID_ARGUMENT` for invalid time ranges (start > end). Most don't validate — they pass to SQL.
 
 **No FK checks** at service level for DisplayService — the queries are aggregate reads only, not writes.
+
+---
+
+### Precursor before Task 31: Make `INTERNAL "no aggregate row"` branch reachable in DisplayService aggregation RPCs
+
+**Why this is needed:** The current impl (`src/services/display_service.cc:60-83, 140-160, 207-224`) uses `COALESCE((SELECT SUM(...)), 0)::DOUBLE PRECISION` wrapped in an outer `SELECT ... FROM (VALUES (1)) AS dummy` to always return 1 row. This means `result.empty()` is **never** true, so the `INTERNAL "no aggregate row"` branch (lines 82, 160, 224) is dead code through the public API. The spec §6 promised this branch would fire on empty data; the impl never lets it.
+
+**Fix:** Add an `EXISTS` pre-check at the start of each of the 3 aggregation RPCs that returns `INTERNAL "no aggregate row"` early if no rows match the filter. The aggregation query that follows stays as-is.
+
+- [ ] **Step 1: Modify `GetVehicleCostSummary` (`display_service.cc:36-105`)**
+
+At line ~45 (after auth + scope, before the SELECT), insert:
+
+```cpp
+auto exists = db::Exec(tx,
+    "SELECT EXISTS(SELECT 1 FROM charging WHERE VehicleId = $1 "
+    "AND StartTime >= $2 AND StartTime <= $3) AS has_data",
+    req->vehicle_id(),
+    TimestampString(req->start_time()),
+    TimestampString(req->end_time()));
+if (!exists.empty() && !exists[0][0].as<bool>()) {
+  auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+  scope.set_status(s); return s;
+}
+```
+
+- [ ] **Step 2: Modify `GetMonthlyReport` (`display_service.cc:107-177`)**
+
+Insert after auth + scope:
+
+```cpp
+auto exists = db::Exec(tx,
+    "SELECT EXISTS(SELECT 1 FROM charging "
+    "WHERE EXTRACT(YEAR FROM StartTime) = $1 AND EXTRACT(MONTH FROM StartTime) = $2 "
+    "AND ($3 = '' OR VehicleId = $3)) AS has_data",
+    req->year(), req->month(), req->vehicle_id());
+if (!exists.empty() && !exists[0][0].as<bool>()) {
+  auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+  scope.set_status(s); return s;
+}
+```
+
+- [ ] **Step 3: Modify `GetAnnualReport` (`display_service.cc:179-241`)**
+
+Insert after auth + scope:
+
+```cpp
+auto exists = db::Exec(tx,
+    "SELECT EXISTS(SELECT 1 FROM charging "
+    "WHERE EXTRACT(YEAR FROM StartTime) = $1 "
+    "AND ($2 = '' OR VehicleId = $2)) AS has_data",
+    req->year(), req->vehicle_id());
+if (!exists.empty() && !exists[0][0].as<bool>()) {
+  auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+  scope.set_status(s); return s;
+}
+```
+
+- [ ] **Step 4: Run existing unit tests + commit**
+
+Run: `cmake --build cmake-build-debug && cd cmake-build-debug && ctest -R evgrpc_tests`
+Expected: PASS (additive change — only adds a new branch).
+
+```bash
+git add src/services/display_service.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "fix(display): make INTERNAL 'no aggregate row' reachable via EXISTS pre-check in 3 aggregation RPCs"
+```
 
 ---
 
@@ -2324,9 +2391,12 @@ void SeedVehicleDataForDisplay(
 
 ```cpp
 TimeRange DefaultTimeRange() {
+  // Wide range covering any data the helpers (Chunks 3/4) seed.
+  // Chunk 3/4 helpers use start.set_seconds(1700000000) = 2023-11-14.
+  // Use 2023-01-01 to 2024-01-01 so any helper-generated row is included.
   TimeRange r;
-  r.start.set_seconds(1704067200);   // 2024-01-01 00:00:00 UTC
-  r.end.set_seconds(1706745599);     // 2024-01-31 23:59:59 UTC
+  r.start.set_seconds(1672531200);   // 2023-01-01 00:00:00 UTC
+  r.end.set_seconds(1704067200);     // 2024-01-01 00:00:00 UTC
   return r;
 }
 
@@ -2336,19 +2406,14 @@ void SeedVehicleDataForDisplay(
     const std::string& vehicle_id,
     int n_chargings,
     int n_consumptions) {
-  const auto wid = CreateWeatherId(pg);
   const auto sid = CreateSourceCategoryId(channel);
-  // Insert n_chargings + n_consumptions via the gRPC helpers. `wid` is
-  // captured to silence -Wunused-variable; CreateConsumptionId auto-
-  // creates its own weather row, so the value isn't used here.
-  (void)wid;
   for (int i = 0; i < n_chargings; ++i) {
     const auto cid = CreateChargingId(channel, vehicle_id, sid);
-    EXPECT_FALSE(cid.empty());
+    CHECK(!cid.empty()) << "CreateChargingId returned empty";
   }
   for (int i = 0; i < n_consumptions; ++i) {
     const auto cid = CreateConsumptionId(channel, pg, vehicle_id);
-    EXPECT_FALSE(cid.empty());
+    CHECK(!cid.empty()) << "CreateConsumptionId returned empty";
   }
 }
 ```
@@ -2375,9 +2440,12 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 
 ### Task 32: `GetVehicleCostSummary` (2 cases) — INTERNAL when no data
 
-- [ ] **Step 1: Write happy-path test (with seeded data)**
+- [ ] **Step 1: Write happy-path test (with seeded data)** — fixture class declared at file scope
 
 ```cpp
+// Fixture class declared once at file scope (Chunk 4 Task 24 Step 1 pattern):
+//   class DisplayServiceIT : public ServiceITBase {};
+
 TEST_F(DisplayServiceIT, GetVehicleCostSummary_HappyPath) {
   const auto vid = data::CreateVehicleId(channel());
   data::SeedVehicleDataForDisplay(channel(), pg(), vid);
@@ -2432,13 +2500,13 @@ TEST_F(DisplayServiceIT, GetMonthlyReport_HappyPath) {
   data::SeedVehicleDataForDisplay(channel(), pg(), vid);
   auto stub = DisplayService::NewStub(channel());
   GetMonthlyReportRequest req;
-  req.set_year(2024);
-  req.set_month(1);
+  req.set_year(2023);   // helper data is in Nov 2023
+  req.set_month(11);
   req.set_vehicle_id(vid);  // optional
   PeriodReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetMonthlyReport(&ctx, req, &resp).ok());
-  EXPECT_EQ(resp.year(), 2024);
-  EXPECT_EQ(resp.month(), 1);
+  EXPECT_EQ(resp.year(), 2023);
+  EXPECT_EQ(resp.month(), 11);
   EXPECT_GT(resp.total_cost(), 0.0);
 }
 ```
@@ -2479,12 +2547,12 @@ TEST_F(DisplayServiceIT, GetAnnualReport_HappyPath) {
   data::SeedVehicleDataForDisplay(channel(), pg(), vid);
   auto stub = DisplayService::NewStub(channel());
   GetAnnualReportRequest req;
-  req.set_year(2024);
+  req.set_year(2023);   // helper data is in Nov 2023
   req.set_vehicle_id(vid);
   PeriodReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetAnnualReport(&ctx, req, &resp).ok());
-  EXPECT_EQ(resp.year(), 2024);
-  EXPECT_EQ(resp.month(), 0);  // 0 = annual
+  EXPECT_EQ(resp.year(), 2023);
+  EXPECT_EQ(resp.month(), 0);  // 0 = annual sentinel (proto comment: "0 = annual; 1-12 = monthly")
   EXPECT_GT(resp.total_cost(), 0.0);
 }
 ```
@@ -2561,17 +2629,24 @@ TEST_F(DisplayServiceIT, GetCostByChargerType_Filtered) {
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
   auto stub = DisplayService::NewStub(channel());
+  // Unfiltered baseline — both vehicles' data
+  GetCostByChargerTypeRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp_unf; grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx_unf, req_unf, &resp_unf).ok());
+  double total_unf = 0;
+  for (const auto& b : resp_unf.breakdowns()) total_unf += b.total_cost();
+  // Filtered — vid_a only
   GetCostByChargerTypeRequest req;
-  req.set_vehicle_id(vid_a);  // filter to vid_a only
+  req.set_vehicle_id(vid_a);
   *req.mutable_start_time() = data::DefaultTimeRange().start;
   *req.mutable_end_time() = data::DefaultTimeRange().end;
   GetCostByChargerTypeResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
-  // Should reflect vid_a only (3 chargings); vid_b's data excluded.
-  // Sum of total_cost from vid_a only.
-  double vid_a_total = 0;
-  for (const auto& b : resp.breakdowns()) vid_a_total += b.total_cost();
-  EXPECT_GT(vid_a_total, 0.0);
+  double total_filt = 0;
+  for (const auto& b : resp.breakdowns()) total_filt += b.total_cost();
+  EXPECT_LT(total_filt, total_unf);  // filtered is strictly less than unfiltered
 }
 ```
 
@@ -2628,15 +2703,24 @@ TEST_F(DisplayServiceIT, GetCostBySourceCategory_Filtered) {
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
   auto stub = DisplayService::NewStub(channel());
+  // Unfiltered baseline
+  GetCostBySourceCategoryRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp_unf; grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx_unf, req_unf, &resp_unf).ok());
+  double total_unf = 0;
+  for (const auto& b : resp_unf.breakdowns()) total_unf += b.total_cost();
+  // Filtered — vid_a only
   GetCostBySourceCategoryRequest req;
   req.set_vehicle_id(vid_a);
   *req.mutable_start_time() = data::DefaultTimeRange().start;
   *req.mutable_end_time() = data::DefaultTimeRange().end;
   GetCostBySourceCategoryResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
-  double total = 0;
-  for (const auto& b : resp.breakdowns()) total += b.total_cost();
-  EXPECT_GT(total, 0.0);
+  double total_filt = 0;
+  for (const auto& b : resp.breakdowns()) total_filt += b.total_cost();
+  EXPECT_LT(total_filt, total_unf);
 }
 ```
 
@@ -2823,16 +2907,24 @@ TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Filtered) {
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
   data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
   auto stub = DisplayService::NewStub(channel());
+  // Unfiltered baseline — bucket totals across both vehicles
+  GetTemperatureConsumptionCorrelationRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetTemperatureConsumptionCorrelationResponse resp_unf; grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx_unf, req_unf, &resp_unf).ok());
+  int total_unf = 0;
+  for (const auto& b : resp_unf.buckets()) total_unf += b.sample_count();
+  // Filtered — vid_a only
   GetTemperatureConsumptionCorrelationRequest req;
   req.set_vehicle_id(vid_a);
   *req.mutable_start_time() = data::DefaultTimeRange().start;
   *req.mutable_end_time() = data::DefaultTimeRange().end;
   GetTemperatureConsumptionCorrelationResponse resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
-  // Buckets don't have vehicle_id field; verify total sample count matches vid_a only
-  int total = 0;
-  for (const auto& b : resp.buckets()) total += b.sample_count();
-  EXPECT_GT(total, 0);
+  int total_filt = 0;
+  for (const auto& b : resp.buckets()) total_filt += b.sample_count();
+  EXPECT_LT(total_filt, total_unf);
 }
 ```
 
@@ -2881,20 +2973,39 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 
 If coverage < 95%, add (concrete, ordered by likely impact):
 
-- [ ] **Step 1: Add `start_time`/`end_time` filter cases** for each list-style RPC (5 cases total) — narrow window excludes seeded data → returns empty
+- [ ] **Step 1: Add 5 time-range filter cases** (one per list-style RPC) — narrow window excludes seeded data → returns empty
   ```cpp
   TEST_F(DisplayServiceIT, GetCostByChargerType_TimeRangeFilter_Empty) {
-    // ... seed data, then request with start=2025-01-01 end=2025-01-31 (no data in range)
+    const auto vid = data::CreateVehicleId(channel());
+    data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+    auto stub = DisplayService::NewStub(channel());
+    GetCostByChargerTypeRequest req;
+    req.set_vehicle_id(vid);
+    req.mutable_start_time()->set_seconds(1735689600);  // 2025-01-01
+    req.mutable_end_time()->set_seconds(1735776000);    // 2025-01-02
+    GetCostByChargerTypeResponse resp; grpc::ClientContext ctx;
+    ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+    EXPECT_EQ(resp.breakdowns_size(), 0);
   }
-  // Repeat for GetCostBySourceCategory, GetConsumptionEfficiency, GetRangeAccuracy, GetTemperatureConsumptionCorrelation
+  // Repeat for: GetCostBySourceCategory, GetConsumptionEfficiency, GetRangeAccuracy, GetTemperatureConsumptionCorrelation
   ```
-- [ ] **Step 2: Add INVALID_ARGUMENT case** for any RPC with a validator (read `display_service.cc` to identify which RPCs validate `start > end`)
+- [ ] **Step 2: Add 1-2 INVALID_ARGUMENT cases** for RPCs with validators (check `display_service.cc` for `start_time >= end_time` checks):
   ```cpp
   TEST_F(DisplayServiceIT, GetVehicleCostSummary_StartAfterEnd_InvalidArgument) {
-    // ... start > end → INVALID_ARGUMENT (if validator exists)
+    // ... set start > end, expect INVALID_ARGUMENT (only if validator exists)
   }
   ```
-- [ ] **Step 3: Re-run lcov; expect ≥ 95%**
+- [ ] **Step 3: Add multi-vehicle case** for any list RPC that supports no `vehicle_id` filter (asserts > 1 row across multiple vehicles):
+  ```cpp
+  TEST_F(DisplayServiceIT, GetCostByChargerType_NoVehicleFilter) {
+    const auto vid_a = data::CreateVehicleId(channel());
+    const auto vid_b = data::CreateVehicleId(channel());
+    data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+    data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+    // ... assert multiple breakdowns or larger total than filtered single-vehicle case
+  }
+  ```
+- [ ] **Step 4: Re-run lcov; expect ≥ 95%**
   ```bash
   cd cmake-build-cov && \
     lcov --capture --directory . --output-file display.info \
@@ -2902,10 +3013,10 @@ If coverage < 95%, add (concrete, ordered by likely impact):
          --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
   lcov --summary display.info 2>&1 | grep -E 'lines|====='
   ```
-- [ ] **Step 4: Commit coverage closure**
+- [ ] **Step 5: Commit coverage closure**
   ```bash
   git add tests/integration/display_service_test.cc
-  git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): coverage gap closure — time-range filter + validator"
+  git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): coverage gap closure — time-range filter + validator + multi-vehicle"
   ```
 
 ---
