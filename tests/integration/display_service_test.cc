@@ -164,6 +164,74 @@ TEST_F(DisplayServiceIT, GetAnnualReport_NoData_Internal) {
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
 }
 
+// Task 35: GetCostByChargerType happy path. Seeds 3 charging rows
+// for one vehicle (all CHARGER_TYPE_FAST per helper), then asks for
+// the cost breakdown over the default time range. Asserts at least
+// 1 breakdown returned and every breakdown has positive total_cost.
+TEST_F(DisplayServiceIT, GetCostByChargerType_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.breakdowns_size(), 0);
+  for (const auto& b : resp.breakdowns()) {
+    EXPECT_GT(b.total_cost(), 0.0);
+  }
+}
+
+// Task 35: GetCostByChargerType empty case. No data seeded — list
+// RPC returns an empty list (NOT INTERNAL — that's only for the 3
+// aggregation RPCs).
+TEST_F(DisplayServiceIT, GetCostByChargerType_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+
+// Task 35: GetCostByChargerType filtered case. Seeds two vehicles,
+// asks for unfiltered (both) then filtered (vid_a only). Filtered
+// total should be strictly less than unfiltered total.
+TEST_F(DisplayServiceIT, GetCostByChargerType_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  // Unfiltered baseline — both vehicles' data.
+  GetCostByChargerTypeRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp_unf;
+  grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx_unf, req_unf, &resp_unf).ok());
+  double total_unf = 0;
+  for (const auto& b : resp_unf.breakdowns()) total_unf += b.total_cost();
+  // Filtered — vid_a only.
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  double total_filt = 0;
+  for (const auto& b : resp.breakdowns()) total_filt += b.total_cost();
+  EXPECT_LT(total_filt, total_unf);
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
