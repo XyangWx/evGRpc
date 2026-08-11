@@ -31,3 +31,9 @@ target_link_libraries(evgrpc_tests PRIVATE
   libpqxx::pqxx
 )
 add_test(NAME evgrpc_tests COMMAND evgrpc_tests)
+
+# Per-target coverage (see top-level CMakeLists.txt for why global fails).
+if(EVGRPC_COVERAGE)
+  target_compile_options(evgrpc_tests PRIVATE --coverage -O0 -g)
+  target_link_options(evgrpc_tests PRIVATE --coverage)
+endif()
