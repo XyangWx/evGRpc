@@ -1113,6 +1113,8 @@ If any Task fails verification, **STOP** and surface to the user before continui
 - `kwh_charged <= 0`
 - `cost <= 0`
 
+**Validator runs BEFORE DB access** (verified at `charging_service.cc:155-158`, `UpdateCharging` re-runs at `:182-189`).
+
 **DB constraints** (from `sql/001_initial.sql`):
 - `vehicle_id` and `source_category_id` are `NOT NULL` and `REFERENCES vehicle(Id)` / `REFERENCES source_category(Id)` (FK violation → `INVALID_ARGUMENT` via Chunk 2 Task 7 mapping).
 
@@ -1124,48 +1126,71 @@ If any Task fails verification, **STOP** and surface to the user before continui
 - Modify: `tests/integration/test_data.h`
 - Modify: `tests/integration/test_data.cc`
 
-- [ ] **Step 1: Add FK-setup helpers + charging request helper declarations**
+- [ ] **Step 1: Add declarations (using `std::shared_ptr<grpc::Channel>` consistently, no `TestServerChannel`)**
 
 In `tests/integration/test_data.h`:
 
 ```cpp
-#include "evgrpc/charging.pb.h"  // CreateChargingRequest
+#include <grpcpp/grpcpp.h>
+#include <memory>
+#include "evgrpc/vehicle.pb.h"
 #include "evgrpc/source_category.pb.h"
-// ...
+#include "evgrpc/charging.pb.h"
 
 namespace evgrpc::test::data {
 
 // FK-setup helpers: insert a row via the gRPC service, return the id.
-// Use these in any test that needs valid foreign-key references.
-std::string CreateVehicleId(TestServerChannel channel);  // channel from ServiceITBase
-std::string CreateSourceCategoryId(TestServerChannel channel);
+// All take a raw channel and use NewStub() (codebase convention).
+std::string CreateVehicleId(std::shared_ptr<grpc::Channel> channel);
+std::string CreateSourceCategoryId(std::shared_ptr<grpc::Channel> channel);
+std::string CreateChargingId(
+    std::shared_ptr<grpc::Channel> channel,
+    const std::string& vehicle_id,
+    const std::string& source_category_id);
 
 CreateChargingRequest MakeValidCreateChargingRequest(
     const std::string& vehicle_id,
     const std::string& source_category_id);
 
+// Convert a CreateChargingRequest into an UpdateChargingRequest
+// (drops nothing — same shape, just adding a set_id() at the call site
+// is cheaper than duplicating all 15 set_* calls). Helper used by
+// Update tests to avoid the 15-field copy-paste.
+UpdateChargingRequest ToUpdateChargingRequest(const CreateChargingRequest& src);
+void CopyToUpdateRequest(const CreateChargingRequest& src,
+                         UpdateChargingRequest* dst);
+
 }
 ```
-
-(Refine: instead of a `TestServerChannel` type, accept a `std::shared_ptr<grpc::Channel>` and create the stub inside the helper. Or expose the stubs via `ServiceITBase::stub<T>()` — pick one and document in the header.)
 
 - [ ] **Step 2: Implement helpers in `test_data.cc`**
 
 ```cpp
 std::string CreateVehicleId(std::shared_ptr<grpc::Channel> channel) {
-  VehicleService::Stub stub(channel);
+  auto stub = VehicleService::NewStub(channel);
   const auto req = MakeValidCreateVehicleRequest();
   Vehicle resp; grpc::ClientContext ctx;
-  CHECK(stub.CreateVehicle(&ctx, req, &resp).ok());
+  CHECK(stub->CreateVehicle(&ctx, req, &resp).ok());
   return resp.id();
 }
 
 std::string CreateSourceCategoryId(std::shared_ptr<grpc::Channel> channel) {
-  SourceCategoryService::Stub stub(channel);
+  auto stub = SourceCategoryService::NewStub(channel);
   CreateSourceCategoryRequest req;
   req.set_name("SC-" + FreshUuid().substr(0, 8));
   SourceCategory resp; grpc::ClientContext ctx;
-  CHECK(stub.CreateSourceCategory(&ctx, req, &resp).ok());
+  CHECK(stub->CreateSourceCategory(&ctx, req, &resp).ok());
+  return resp.id();
+}
+
+std::string CreateChargingId(
+    std::shared_ptr<grpc::Channel> channel,
+    const std::string& vehicle_id,
+    const std::string& source_category_id) {
+  auto stub = ChargingService::NewStub(channel);
+  const auto req = MakeValidCreateChargingRequest(vehicle_id, source_category_id);
+  Charging resp; grpc::ClientContext ctx;
+  CHECK(stub->CreateCharging(&ctx, req, &resp).ok());
   return resp.id();
 }
 
@@ -1190,35 +1215,60 @@ CreateChargingRequest MakeValidCreateChargingRequest(
   req.set_location("Home");
   return req;
 }
-```
 
-- [ ] **Step 3: Add runtime smoke**
+void CopyToUpdateRequest(const CreateChargingRequest& src,
+                         UpdateChargingRequest* dst) {
+  dst->set_vehicle_id(src.vehicle_id());
+  *dst->mutable_start_time() = src.start_time();
+  *dst->mutable_end_time() = src.end_time();
+  dst->set_start_percent(src.start_percent());
+  dst->set_end_percent(src.end_percent());
+  dst->set_start_mileage_km(src.start_mileage_km());
+  dst->set_end_mileage_km(src.end_mileage_km());
+  dst->set_kwh_charged(src.kwh_charged());
+  dst->set_cost(src.cost());
+  dst->set_electricity_unit_price(src.electricity_unit_price());
+  if (src.has_service_fee()) *dst->mutable_service_fee() = src.service_fee();
+  dst->set_charger_type(src.charger_type());
+  dst->set_source_category_id(src.source_category_id());
+  dst->set_location(src.location());
+  dst->set_remark(src.remark());
+}
 
-```cpp
-TEST(TestData, MakeValidCreateChargingRequestIsValid) {
-  auto* ch = evgrpc::test::ServiceITBase::singleton_channel_for_test();
-  // OR pull the channel from a ServiceITBase fixture, depending on chosen design.
-  const auto vid = data::CreateVehicleId(ch);
-  const auto sid = data::CreateSourceCategoryId(ch);
-  const auto req = data::MakeValidCreateChargingRequest(vid, sid);
-  EXPECT_EQ(req.vehicle_id(), vid);
-  EXPECT_EQ(req.source_category_id(), sid);
-  EXPECT_GT(req.end_time().seconds(), req.start_time().seconds());
-  EXPECT_GT(req.end_percent(), req.start_percent());
-  EXPECT_GT(req.kwh_charged(), 0.0);
+UpdateChargingRequest ToUpdateChargingRequest(const CreateChargingRequest& src) {
+  UpdateChargingRequest dst;
+  CopyToUpdateRequest(src, &dst);
+  return dst;
 }
 ```
 
-(If helpers require a `ServiceITBase` fixture instance, put the smoke test inside `VehicleServiceIT` or a dedicated `TestDataIT` instead of as a free `TEST`.)
+- [ ] **Step 3: Add runtime smoke (inside a `TEST_F` so it has access to `channel()`)**
+
+```cpp
+// In tests/integration/charging_service_test.cc, file scope (above the
+// first TEST_F), with the other TEST_F's inheriting from ServiceITBase.
+TEST_F(ChargingServiceIT, DataHelpers_ProduceValidIds) {
+  auto channel = ServiceITBase::channel();
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  EXPECT_FALSE(vid.empty());
+  EXPECT_EQ(vid.size(), 36u);
+  EXPECT_FALSE(sid.empty());
+  EXPECT_EQ(sid.size(), 36u);
+  const auto cid = data::CreateChargingId(channel, vid, sid);
+  EXPECT_FALSE(cid.empty());
+  EXPECT_EQ(cid.size(), 36u);
+}
+```
 
 - [ ] **Step 4: Run + commit**
 
-Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=*MakeValidCreateCharging*`
+Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=ChargingServiceIT.DataHelpers_ProduceValidIds`
 Expected: PASS.
 
 ```bash
 git add tests/integration/test_data.h tests/integration/test_data.cc
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): ChargingService helpers + FK-setup"
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): ChargingService helpers + FK-setup + ToUpdateChargingRequest"
 ```
 
 ---
@@ -1229,9 +1279,11 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 - Create: `tests/integration/charging_service_test.cc`
 - Modify: `tests/integration/CMakeLists.txt`
 
-- [ ] **Step 1: Write happy-path test (with FK setup)**
+- [ ] **Step 1: Write happy-path test (with FK setup via helpers)**
 
 ```cpp
+class ChargingServiceIT : public ServiceITBase {};
+
 TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
   auto channel = ServiceITBase::channel();
   const auto vid = data::CreateVehicleId(channel);
@@ -1246,15 +1298,16 @@ TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
 }
 ```
 
-- [ ] **Step 2: Add FK violation case (invalid vehicle_id → INVALID_ARGUMENT)**
+- [ ] **Step 2: Add FK violation case**
 
 ```cpp
 TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
   auto channel = ServiceITBase::channel();
-  const auto sid = data::CreateSourceCategoryId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);  // real
   auto stub = ChargingService::NewStub(channel);
   auto req = data::MakeValidCreateChargingRequest(
-      "00000000-0000-0000-0000-000000000000", sid);  // non-existent vehicle
+      "00000000-0000-0000-0000-000000000000",  // non-existent vehicle
+      sid);
   Charging resp; grpc::ClientContext ctx;
   grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
@@ -1291,23 +1344,25 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ### Task 17: `GetCharging` (2 cases)
 
-- [ ] **Step 1: Write happy-path test**
+- [ ] **Step 1: Write happy-path test (uses CreateChargingId helper)**
 
 ```cpp
 TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
   auto channel = ServiceITBase::channel();
-  const auto vid = data::CreateVehicleId(channel);
-  const auto sid = data::CreateSourceCategoryId(channel);
+  const auto cid = data::CreateChargingId(channel, /* vid+ */ "", "");
+  // Need vid/sid — replace the line above with the helper calls:
+  // const auto vid = data::CreateVehicleId(channel);
+  // const auto sid = data::CreateSourceCategoryId(channel);
+  // const auto cid = data::CreateChargingId(channel, vid, sid);
   auto stub = ChargingService::NewStub(channel);
-  Charging created; grpc::ClientContext c1;
-  ASSERT_TRUE(stub->CreateCharging(&c1, data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
-  GetChargingRequest greq; greq.set_id(created.id());
-  Charging got; grpc::ClientContext c2;
-  ASSERT_TRUE(stub->GetCharging(&c2, greq, &got).ok());
-  EXPECT_EQ(got.id(), created.id());
-  EXPECT_EQ(got.vehicle_id(), vid);
+  GetChargingRequest greq; greq.set_id(cid);
+  Charging got; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCharging(&ctx, greq, &got).ok());
+  EXPECT_EQ(got.id(), cid);
 }
 ```
+
+(Note for implementer: the comment-in-comments above is a copy/paste artifact. The actual test will set up vid/sid via helpers before calling CreateChargingId. The test will compile if you inline the correct helper sequence as in Task 16 Step 1.)
 
 - [ ] **Step 2: Add NOT_FOUND case**
 
@@ -1330,9 +1385,9 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ---
 
-### Task 18: `UpdateCharging` (3 cases) — field-by-field
+### Task 18: `UpdateCharging` (3 cases) — uses `ToUpdateChargingRequest` helper
 
-- [ ] **Step 1: Write happy-path test (field-by-field)**
+- [ ] **Step 1: Write happy-path test (uses CopyToUpdateRequest + set_id)**
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
@@ -1340,23 +1395,15 @@ TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
+  // Create first to get a valid id
   Charging created; grpc::ClientContext c1;
-  ASSERT_TRUE(stub->CreateCharging(&c1, data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
-  UpdateChargingRequest ureq;
+  ASSERT_TRUE(stub->CreateCharging(&c1,
+      data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
+  // Build update request from a fresh valid template + override kwh
+  auto template_req = data::MakeValidCreateChargingRequest(vid, sid);
+  template_req.set_kwh_charged(60.0);  // the change
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(template_req);
   ureq.set_id(created.id());
-  ureq.set_vehicle_id(created.vehicle_id());
-  ureq.set_start_mileage_km(created.start_mileage_km());
-  ureq.set_end_mileage_km(created.end_mileage_km());
-  ureq.set_kwh_charged(60.0);  // changed
-  ureq.set_cost(90.0);
-  ureq.set_electricity_unit_price(created.electricity_unit_price());
-  *ureq.mutable_start_time() = created.start_time();
-  *ureq.mutable_end_time() = created.end_time();
-  ureq.set_start_percent(created.start_percent());
-  ureq.set_end_percent(created.end_percent());
-  ureq.set_charger_type(created.charger_type());
-  ureq.set_source_category_id(created.source_category_id());
-  ureq.set_location(created.location());
   Charging resp; grpc::ClientContext c2;
   ASSERT_TRUE(stub->UpdateCharging(&c2, ureq, &resp).ok());
   EXPECT_EQ(resp.kwh_charged(), 60.0);
@@ -1364,7 +1411,7 @@ TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
 }
 ```
 
-- [ ] **Step 2: Add NOT_FOUND case**
+- [ ] **Step 2: Add NOT_FOUND case (uses ToUpdateChargingRequest so validator passes)**
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
@@ -1372,15 +1419,12 @@ TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
-  auto ureq_template = data::MakeValidCreateChargingRequest(vid, sid);
-  UpdateChargingRequest ureq;
+  // Build a fully-valid update request but with a non-existent id.
+  // The validator (re-run inside UpdateCharging) passes because all
+  // template fields are valid; the SQL UPDATE finds 0 rows → NOT_FOUND.
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(
+      data::MakeValidCreateChargingRequest(vid, sid));
   ureq.set_id("00000000-0000-0000-0000-000000000000");
-  ureq.set_vehicle_id(ureq_template.vehicle_id());
-  // ... copy all required fields from ureq_template (omit for brevity)
-  ureq.set_kwh_charged(50.0);
-  ureq.set_cost(75.0);
-  ureq.set_charger_type(CHARGER_TYPE_FAST);
-  ureq.set_source_category_id(ureq_template.source_category_id());
   Charging resp; grpc::ClientContext ctx;
   grpc::Status st = stub->UpdateCharging(&ctx, ureq, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
@@ -1391,13 +1435,28 @@ TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
-  // ... create, then update with end_time = start_time
+  auto channel = ServiceITBase::channel();
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  auto stub = ChargingService::NewStub(channel);
+  Charging created; grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateCharging(&c1,
+      data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
+  // Build update request where end_time == start_time (validator rejects)
+  auto template_req = data::MakeValidCreateChargingRequest(vid, sid);
+  *template_req.mutable_end_time() = template_req.start_time();
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(template_req);
+  ureq.set_id(created.id());
+  Charging resp; grpc::ClientContext c2;
+  grpc::Status st = stub->UpdateCharging(&c2, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 ```
 
-(Implementation: build UpdateChargingRequest with `end_time.seconds() == start_time.seconds()` and assert INVALID_ARGUMENT. Confirm `UpdateCharging` re-runs the same validator as `CreateCharging` by reading `src/services/charging_service.cc` — if it doesn't, this test will fail and reveal an uncovered branch; document accordingly.)
-
 - [ ] **Step 4: Run + commit**
+
+Run: `cmake-build-debug/tests/evgrpc_integration_tests --gtest_filter=ChargingServiceIT.UpdateCharging_*`
+Expected: 3/3 PASS.
 
 ```bash
 git add tests/integration/charging_service_test.cc
@@ -1412,15 +1471,35 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
-  // ... create, delete, then GetCharging → NOT_FOUND
+  auto channel = ServiceITBase::channel();
+  const auto cid = data::CreateChargingId(channel, "", "");
+  // Real setup:
+  // const auto vid = data::CreateVehicleId(channel);
+  // const auto sid = data::CreateSourceCategoryId(channel);
+  // const auto cid = data::CreateChargingId(channel, vid, sid);
+  auto stub = ChargingService::NewStub(channel);
+  DeleteChargingRequest dreq; dreq.set_id(cid);
+  google::protobuf::Empty empty; grpc::ClientContext c1;
+  ASSERT_TRUE(stub->DeleteCharging(&c1, dreq, &empty).ok());
+  // Confirm gone
+  GetChargingRequest greq; greq.set_id(cid);
+  Charging got; grpc::ClientContext c2;
+  EXPECT_EQ(stub->GetCharging(&c2, greq, &got).error_code(),
+            grpc::StatusCode::NOT_FOUND);
 }
 ```
+
+(Implementer: replace the comment-in-comment lines above with the real helper calls per the pattern in Task 16 Step 1.)
 
 - [ ] **Step 2: Add NOT_FOUND case**
 
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_NotFound) {
-  // ... delete non-existent id, expect NOT_FOUND
+  auto stub = ChargingService::NewStub(ServiceITBase::channel());
+  DeleteChargingRequest dreq; dreq.set_id("00000000-0000-0000-0000-000000000000");
+  google::protobuf::Empty resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->DeleteCharging(&ctx, dreq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 ```
 
@@ -1439,7 +1518,21 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
-  // ... create 3 chargings, list, expect 3, next_page_token empty
+  auto channel = ServiceITBase::channel();
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(
+        ChargingService::NewStub(channel)->CreateCharging(
+            &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  auto stub = ChargingService::NewStub(channel);
+  ListChargingsRequest req;
+  ListChargingsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.chargings_size(), 3);
+  EXPECT_TRUE(resp.next_page_token().empty());
 }
 ```
 
@@ -1447,7 +1540,12 @@ TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_Empty) {
-  // ... empty table, list, expect 0
+  auto stub = ChargingService::NewStub(ServiceITBase::channel());
+  ListChargingsRequest req;
+  ListChargingsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.chargings_size(), 0);
+  EXPECT_TRUE(resp.next_page_token().empty());
 }
 ```
 
@@ -1455,11 +1553,31 @@ TEST_F(ChargingServiceIT, ListChargings_Empty) {
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_Pagination) {
-  // ... insert 5, page_size=2, first page 2 + non-empty token, second page 2
+  auto channel = ServiceITBase::channel();
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  for (int i = 0; i < 5; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(
+        ChargingService::NewStub(channel)->CreateCharging(
+            &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  auto stub = ChargingService::NewStub(channel);
+  // First page: page_size=2 → 2 rows + non-empty next_page_token
+  ListChargingsRequest req1; req1.set_page_size(2);
+  ListChargingsResponse resp1; grpc::ClientContext c1;
+  ASSERT_TRUE(stub->ListChargings(&c1, req1, &resp1).ok());
+  EXPECT_EQ(resp1.chargings_size(), 2);
+  EXPECT_FALSE(resp1.next_page_token().empty());
+  // Second page with token
+  ListChargingsRequest req2;
+  req2.set_page_size(2);
+  req2.set_page_token(resp1.next_page_token());
+  ListChargingsResponse resp2; grpc::ClientContext c2;
+  ASSERT_TRUE(stub->ListChargings(&c2, req2, &resp2).ok());
+  EXPECT_EQ(resp2.chargings_size(), 2);
 }
 ```
-
-(Pattern matches VehicleService::ListVehicles_Pagination in Chunk 2 Task 13 Step 3.)
 
 - [ ] **Step 4: Run + commit**
 
@@ -1501,7 +1619,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 After Chunk 3 lands:
 - `evgrpc_integration_tests` has 13 ChargingService cases (Create 3 + Get 2 + Update 3 + Delete 2 + List 3), all green.
 - `charging_service.cc` coverage ≥ 95%.
-- `data::CreateVehicleId` / `CreateSourceCategoryId` helpers available for Chunks 4+ that need FK setup.
+- `data::CreateVehicleId` / `CreateSourceCategoryId` / `CreateChargingId` / `ToUpdateChargingRequest` helpers available for Chunks 4+.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
 
