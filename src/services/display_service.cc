@@ -495,7 +495,7 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
     auto start_ts = MaybeTimestamp(req->start_time());
     auto end_ts = MaybeTimestamp(req->end_time());
 
-    // Dashboard range: SUM(StartRange - EndRange) over charging
+    // Dashboard range: SUM(BeginRange - EndRange) over charging
     // (per spec: "dashboard_range_total_km" = sum of ranges the car
     // THOUGHT it had at charge-start minus what it had at charge-end
     // — i.e. range lost during the charging event).
@@ -508,11 +508,11 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
         "       COALESCE(d.dashboard_range, 0)::DOUBLE PRECISION AS dashboard, "
         "       COALESCE(m.actual_mileage, 0)::DOUBLE PRECISION AS actual "
         "FROM ("
-        "  SELECT VehicleId, SUM(StartRange - EndRange) AS dashboard_range "
-        "  FROM charging "
+        "  SELECT VehicleId, SUM(BeginRange - EndRange) AS dashboard_range "
+        "  FROM consumption "
         "  WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
         "  GROUP BY VehicleId"
         ") d FULL OUTER JOIN ("
         "  SELECT VehicleId, SUM(EndMileage - BeginMileage) AS actual_mileage "
