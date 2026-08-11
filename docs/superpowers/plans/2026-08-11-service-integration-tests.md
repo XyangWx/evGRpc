@@ -3060,9 +3060,281 @@ If any Task fails verification, **STOP** and surface to the user before continui
 
 ## Chunk 6: SourceCategory + Weather
 
-[Stub — 8-12 cases for 4 RPCs (2 Search* + 2 Create).]
+8 cases across 4 Tasks (2 services × 1 Create + 1 Search with 3 sub-cases = 8). Both services are nearly identical (same shape, same DB table — `source_category` and `weather` both have `Id` + `Name` with `Name UNIQUE NOT NULL`). Chunk 6 groups them because the test patterns are identical.
+
+### Proto field reference (verified ground truth)
+
+`proto/evgrpc/source_category.proto`:
+- `SourceCategory { id, name }`
+- `CreateSourceCategoryRequest { string name }`
+- `SearchSourceCategoryRequest { string prefix, int32 limit }` (response: `repeated SourceCategory matches`)
+- 2 RPCs: `CreateSourceCategory`, `SearchSourceCategory`
+
+`proto/evgrpc/weather.proto` (identical structure):
+- `Weather { id, name }`
+- `CreateWeatherRequest { string name }`
+- `SearchWeatherRequest { string prefix, int32 limit }` (response: `repeated Weather matches`)
+- 2 RPCs: `CreateWeather`, `SearchWeather`
+
+### Impl behavior contract (verified from `src/services/source_category_service.cc` and `src/services/weather_service.cc`)
+
+- **Create**: validates `name` is non-empty (likely `INVALID_ARGUMENT` for empty), inserts row with `NewUuid()` for `Id`.
+- **Search**: LIKE-prefix filter on `Name`. Empty prefix returns all rows (or some default subset). `limit` caps result count.
+- **No FK checks** — both services insert/select their own table only.
 
 ---
+
+### Task 42: `CreateSourceCategory` (1 case)
+
+**Files:**
+- Create: `tests/integration/source_category_service_test.cc`
+- Modify: `tests/integration/CMakeLists.txt`
+
+- [ ] **Step 1: Test file header — namespace + fixture class declaration**
+
+```cpp
+#include "tests/integration/service_test_fixtures.h"
+#include "tests/integration/test_data.h"
+#include "evgrpc/source_category.grpc.pb.h"
+#include "evgrpc/source_category.pb.h"
+
+namespace evgrpc::test {
+
+class SourceCategoryServiceIT : public ServiceITBase {};
+
+// Closing `}  // namespace evgrpc::test` added at end of file.
+```
+
+- [ ] **Step 2: Write happy-path test**
+
+```cpp
+TEST_F(SourceCategoryServiceIT, CreateSourceCategory_HappyPath) {
+  auto stub = SourceCategoryService::NewStub(channel());
+  CreateSourceCategoryRequest req;
+  req.set_name("SC-" + data::FreshUuid().substr(0, 8));
+  SourceCategory resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateSourceCategory(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.id().empty());
+  EXPECT_EQ(resp.id().size(), 36u);
+  EXPECT_EQ(resp.name(), req.name());
+}
+```
+
+- [ ] **Step 3: Run + commit**
+
+```bash
+git add tests/integration/source_category_service_test.cc tests/integration/CMakeLists.txt
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(source_category): CreateSourceCategory — happy"
+```
+
+---
+
+### Task 43: `SearchSourceCategory` (3 cases)
+
+- [ ] **Step 1: Write happy-path test (with multiple rows)**
+
+```cpp
+TEST_F(SourceCategoryServiceIT, SearchSourceCategory_HappyPath) {
+  auto stub = SourceCategoryService::NewStub(channel());
+  // Insert 3 rows with shared "Solar-" prefix
+  for (int i = 0; i < 3; ++i) {
+    CreateSourceCategoryRequest req;
+    req.set_name("Solar-" + data::FreshUuid().substr(0, 8));
+    SourceCategory resp; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateSourceCategory(&c, req, &resp).ok());
+  }
+  SearchSourceCategoryRequest sreq;
+  sreq.set_prefix("Solar-");
+  sreq.set_limit(50);
+  SearchSourceCategoryResponse resp; grpc::ClientContext cx;
+  ASSERT_TRUE(stub->SearchSourceCategory(&cx, sreq, &resp).ok());
+  EXPECT_GE(resp.matches_size(), 3);  // at least the 3 we just inserted
+}
+```
+
+- [ ] **Step 2: Write empty case (no matches)**
+
+```cpp
+TEST_F(SourceCategoryServiceIT, SearchSourceCategory_Empty) {
+  auto stub = SourceCategoryService::NewStub(channel());
+  SearchSourceCategoryRequest sreq;
+  sreq.set_prefix("ZZZZ-NoSuchPrefix-");
+  sreq.set_limit(50);
+  SearchSourceCategoryResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->SearchSourceCategory(&ctx, sreq, &resp).ok());
+  EXPECT_EQ(resp.matches_size(), 0);
+}
+```
+
+- [ ] **Step 3: Write filtered case (limit caps results)**
+
+```cpp
+TEST_F(SourceCategoryServiceIT, SearchSourceCategory_LimitCapped) {
+  auto stub = SourceCategoryService::NewStub(channel());
+  // Insert 5 rows with shared "Wind-" prefix
+  for (int i = 0; i < 5; ++i) {
+    CreateSourceCategoryRequest req;
+    req.set_name("Wind-" + data::FreshUuid().substr(0, 8));
+    SourceCategory resp; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateSourceCategory(&c, req, &resp).ok());
+  }
+  SearchSourceCategoryRequest sreq;
+  sreq.set_prefix("Wind-");
+  sreq.set_limit(2);  // cap at 2
+  SearchSourceCategoryResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->SearchSourceCategory(&ctx, sreq, &resp).ok());
+  EXPECT_LE(resp.matches_size(), 2);
+}
+```
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+git add tests/integration/source_category_service_test.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(source_category): SearchSourceCategory — happy + empty + limit-capped"
+```
+
+---
+
+### Task 44: `CreateWeather` + `SearchWeather` (1 + 3 cases, same pattern as Tasks 42-43)
+
+**Files:**
+- Create: `tests/integration/weather_service_test.cc`
+- Modify: `tests/integration/CMakeLists.txt`
+
+- [ ] **Step 1: Test file header**
+
+```cpp
+#include "tests/integration/service_test_fixtures.h"
+#include "tests/integration/test_data.h"
+#include "evgrpc/weather.grpc.pb.h"
+#include "evgrpc/weather.pb.h"
+
+namespace evgrpc::test {
+
+class WeatherServiceIT : public ServiceITBase {};
+
+// Closing `}  // namespace evgrpc::test` added at end of file.
+```
+
+- [ ] **Step 2: Write happy-path test for `CreateWeather`**
+
+```cpp
+TEST_F(WeatherServiceIT, CreateWeather_HappyPath) {
+  auto stub = WeatherService::NewStub(channel());
+  CreateWeatherRequest req;
+  req.set_name("W-" + data::FreshUuid().substr(0, 8));
+  Weather resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateWeather(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.id().empty());
+  EXPECT_EQ(resp.id().size(), 36u);
+  EXPECT_EQ(resp.name(), req.name());
+}
+```
+
+- [ ] **Step 3: Write 3 cases for `SearchWeather`** (mirror Tasks 43 pattern)
+
+```cpp
+TEST_F(WeatherServiceIT, SearchWeather_HappyPath) {
+  auto stub = WeatherService::NewStub(channel());
+  for (int i = 0; i < 3; ++i) {
+    CreateWeatherRequest req;
+    req.set_name("Sunny-" + data::FreshUuid().substr(0, 8));
+    Weather resp; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateWeather(&c, req, &resp).ok());
+  }
+  SearchWeatherRequest sreq;
+  sreq.set_prefix("Sunny-");
+  sreq.set_limit(50);
+  SearchWeatherResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->SearchWeather(&ctx, sreq, &resp).ok());
+  EXPECT_GE(resp.matches_size(), 3);
+}
+
+TEST_F(WeatherServiceIT, SearchWeather_Empty) {
+  auto stub = WeatherService::NewStub(channel());
+  SearchWeatherRequest sreq;
+  sreq.set_prefix("ZZZZ-NoSuchPrefix-");
+  sreq.set_limit(50);
+  SearchWeatherResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->SearchWeather(&ctx, sreq, &resp).ok());
+  EXPECT_EQ(resp.matches_size(), 0);
+}
+
+TEST_F(WeatherServiceIT, SearchWeather_LimitCapped) {
+  auto stub = WeatherService::NewStub(channel());
+  for (int i = 0; i < 5; ++i) {
+    CreateWeatherRequest req;
+    req.set_name("Cloudy-" + data::FreshUuid().substr(0, 8));
+    Weather resp; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateWeather(&c, req, &resp).ok());
+  }
+  SearchWeatherRequest sreq;
+  sreq.set_prefix("Cloudy-");
+  sreq.set_limit(2);
+  SearchWeatherResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->SearchWeather(&ctx, sreq, &resp).ok());
+  EXPECT_LE(resp.matches_size(), 2);
+}
+```
+
+- [ ] **Step 4: Add namespace closing brace at end of file + commit**
+
+Before committing, append at the bottom of `tests/integration/weather_service_test.cc`:
+
+```cpp
+}  // namespace evgrpc::test
+```
+
+(Pattern matches Task 31 Step 1a / Task 39 Step 4.)
+
+Run: `cmake --build cmake-build-debug --target evgrpc_integration_tests && cd cmake-build-debug && ctest -R evgrpc_integration_tests --gtest_filter='SourceCategory*:Weather*'`
+Expected: 8 cases PASS.
+
+```bash
+git add tests/integration/weather_service_test.cc tests/integration/CMakeLists.txt
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(weather): CreateWeather + SearchWeather — happy + empty + limit-capped"
+```
+
+---
+
+### Task 45: Verify coverage ≥ 95% on both `source_category_service.cc` and `weather_service.cc`
+
+- [ ] **Step 1: Run lcov filtered to both service impls**
+
+```bash
+cd cmake-build-cov && \
+  lcov --capture --directory . --output-file lookup.info \
+       --include '*/src/services/source_category_service.cc' \
+       --include '*/src/services/weather_service.cc' \
+       --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
+lcov --summary lookup.info 2>&1 | grep -E 'lines|====='
+```
+Expected: `lines......: 95.0%` or higher across both.
+
+- [ ] **Step 2: If below 95%, identify uncovered lines**
+
+Run: `genhtml lookup.info --output-directory lookup_html && grep 'class="lineUncov"' lookup_html/src/services/source_category_service.cc.gcov.html | head`
+
+(Probably no gap closure needed — both services are very simple ~33-80 LOC each, 8 cases likely ≥ 95%.)
+
+- [ ] **Step 3: Commit coverage verification**
+
+```bash
+git add docs/superpowers/plans/2026-08-11-service-integration-tests.md
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk6): SourceCategory + Weather coverage verified ≥95%"
+```
+
+---
+
+### End of Chunk 6
+
+After Chunk 6 lands:
+- `evgrpc_integration_tests` has 8 SourceCategory+Weather cases (4 RPCs × ~2 cases each), all green.
+- `source_category_service.cc` + `weather_service.cc` coverage ≥ 95%.
+- `data::FreshUuid()` helper confirmed working across Chunks 1-6.
+
+If any Task fails verification, **STOP** and surface to the user before continuing.
 
 ## Chunk 7: Coverage + scripts/coverage.sh
 
