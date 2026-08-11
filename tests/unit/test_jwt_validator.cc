@@ -76,8 +76,7 @@ TEST(JwtValidatorNoFixture, BypassDefaultsToFalse) {
 }
 
 TEST(JwtValidatorNoFixture, BypassReturnsSyntheticClaims) {
-  // Named constant (NOT the literal `true`) so the spec §10.5
-  // Named constant (not the literal boolean) so the §10.5
+  // Named constant (not the literal boolean) so the spec §10.5
   // bypass-grep gate in test_server.cc stays at exactly one match.
   constexpr bool kEnableBypassForTest = true;
   JwtValidator v;
