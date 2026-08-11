@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <grpcpp/grpcpp.h>
 #include <memory>
+#include "fixtures/pg_container.h"
 #include "fixtures/shared_pg.h"
 #include "fixtures/test_server.h"
 
@@ -21,6 +22,10 @@ class ServiceITBase : public ::testing::Test {
   void TearDown() override;
 
   std::shared_ptr<grpc::Channel> channel() const { return channel_; }
+  // Direct PG access for tests that need to seed rows outside the
+  // gRPC surface (e.g., direct-SQL weather row insertion in Chunk 4
+  // Task 23 — WeatherService isn't implemented until Chunk 6).
+  std::shared_ptr<PgContainer> pg() const { return SharedPgEnvironment::pg(); }
 
  private:
   static std::shared_ptr<TestServer> server_;

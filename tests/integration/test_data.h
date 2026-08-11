@@ -19,9 +19,11 @@
 
 #include <grpcpp/grpcpp.h>
 #include <google/protobuf/timestamp.pb.h>
+#include <pqxx/pqxx>
 
 #include "evgrpc/vehicle.pb.h"
 #include "evgrpc/charging.pb.h"             // CreateChargingRequest, UpdateChargingRequest
+#include "evgrpc/consumption.pb.h"           // CreateConsumptionRequest, UpdateConsumptionRequest
 #include "evgrpc/source_category.pb.h"       // CreateSourceCategoryRequest
 #include "fixtures/pg_container.h"
 
@@ -107,6 +109,56 @@ CreateChargingRequest MakeValidCreateChargingRequest(
 // calling ChargingService.UpdateCharging. Used by Update tests
 // (Tasks 18/19) to avoid 14-field copy-paste.
 UpdateChargingRequest ToUpdateChargingRequest(const CreateChargingRequest& src);
+
+// ---- ConsumptionService setup helpers (Chunk 4, Task 23) ----
+//
+// `weather_id` is REQUIRED by the DB schema (`consumption.WeatherId`
+// is NOT NULL with FK REFERENCES weather(Id) per sql/001_initial.sql:26).
+// There is NO default — callers must supply a real weather id. The
+// auto-creating `CreateConsumptionId` helper below creates one via
+// direct SQL so we don't pull in WeatherService (Chunk 6).
+
+// Direct-SQL weather row creator. Avoids cross-chunk dependency on
+// WeatherService (Chunk 6). Returns the new weather Id.
+std::string CreateWeatherId(std::shared_ptr<PgContainer> pg);
+
+// Convenience: auto-creates a weather row, then a consumption row.
+// Returns the consumption id. Use this in tests that don't need to
+// assert on a specific weather_id.
+std::string CreateConsumptionId(
+    std::shared_ptr<grpc::Channel> channel,
+    std::shared_ptr<PgContainer> pg,
+    const std::string& vehicle_id);
+
+// Build a fully-valid CreateConsumptionRequest that passes the
+// production `ValidateConsumption` (end > start,
+// end_percent < begin_percent, highest_temperature_c >=
+// lowest_temperature_c):
+//   * vehicle_id / weather_id — caller-supplied FK refs
+//   * start = 2023-11-14 22:13:20 UTC (1700000000)
+//   * end   = +1h (1700003600)
+//   * begin_percent=80, end_percent=20 (consumption DRAINS charge,
+//     inverse of charging)
+//   * begin_mileage_km=10000, end_mileage_km=10100
+//   * begin_range_km=400, end_range_km=350 (range shrinks)
+//   * highest_temperature_c=25.0, lowest_temperature_c=10.0
+//   * remark empty (-> column NULL)
+CreateConsumptionRequest MakeValidCreateConsumptionRequest(
+    const std::string& vehicle_id,
+    const std::string& weather_id);
+
+// Convert a CreateConsumptionRequest into an UpdateConsumptionRequest by
+// copying every non-id field (vehicle_id / start / end / begin_percent /
+// end_percent / begin_mileage_km / end_mileage_km / begin_range_km /
+// end_range_km / highest_temperature_c / lowest_temperature_c /
+// weather_id / remark).
+//
+// `id` is NOT copied — CreateConsumptionRequest has no id field (it's
+// server-set), so the caller must `set_id` on the result before
+// calling ConsumptionService.UpdateConsumption. Used by Update tests
+// (Task 26) to avoid 13-field copy-paste.
+UpdateConsumptionRequest ToUpdateConsumptionRequest(
+    const CreateConsumptionRequest& src);
 
 // Time range — covers Nov 2023 (the seeded helper range) with margin.
 // Helpers in Chunks 3/4 use start.set_seconds(1700000000) = 2023-11-14.
