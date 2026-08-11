@@ -69,4 +69,43 @@ TEST(E2ESmoke, CreateThenListVehicle) {
   EXPECT_EQ(list_resp.vehicles(0).id(), created.id());
 }
 
+// Verifies the TestServer::Options{no_auth} path: the in-process gRPC
+// server's JwtValidator runs in test-mode bypass, so an RPC issued
+// without any bearer-token credentials must succeed end-to-end.
+// Pre-chunk-1 this would fail with UNAUTHENTICATED; post-chunk-1 the
+// validator returns synthetic claims for every request, so authorization
+// is skipped. Tests that don't care about auth (e.g. service-shape
+// coverage in Chunks 2-6) should use this path so they don't have to
+// mint a real RS256 JWT per call.
+TEST(E2ESmokeNoAuth, CreateVehicleWithoutToken) {
+  auto pg = std::make_shared<PgContainer>();
+  {
+    pqxx::connection c{pg->Conninfo()};
+    pqxx::nontransaction tx{c};
+    tx.exec("TRUNCATE vehicle RESTART IDENTITY CASCADE");
+    tx.commit();
+  }
+  TestServer ts(TestServer::Options{
+      .no_auth = true,
+      .pg = pg,
+  });
+  auto stub = evgrpc::VehicleService::NewStub(ts.Channel());
+
+  evgrpc::CreateVehicleRequest req;
+  req.set_brand("Tesla");
+  req.set_calibrated_range_km(500);
+  req.set_battery_capacity_kwh(75.0);
+  google::protobuf::Timestamp purchase_date;
+  purchase_date.set_seconds(1704067200);  // 2024-01-01T00:00:00Z
+  *req.mutable_purchase_date() = purchase_date;
+  req.set_license_plate("NOAUTH1");
+
+  evgrpc::Vehicle created;
+  grpc::ClientContext ctx;  // NO credentials attached — bypass path
+  auto status = stub->CreateVehicle(&ctx, req, &created);
+  EXPECT_TRUE(status.ok())
+      << "CreateVehicle RPC failed (no_auth path): error_code="
+      << status.error_code() << " error_message=" << status.error_message();
+}
+
 }  // namespace evgrpc::test

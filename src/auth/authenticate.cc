@@ -13,6 +13,7 @@ constexpr char kReasonOk[] = "ok";
 constexpr char kReasonMissingHeader[] = "missing_header";
 constexpr char kReasonNonBearer[] = "non_bearer";
 constexpr char kReasonBadSignature[] = "bad_signature";
+constexpr char kReasonBypass[] = "bypass";
 }  // namespace
 
 grpc::Status Authenticate(
@@ -20,6 +21,23 @@ grpc::Status Authenticate(
     const JwtValidator& validator,
     Claims* out_claims,
     std::string* out_reason) {
+  // Test-mode bypass: when JwtValidator.bypass is set, skip the header
+  // check entirely and synthesize claims from the validator's
+  // configured iss/aud. The flag is only ever set in the TestServer
+  // fixture (tests/fixtures/test_server.cc) — the §10.5 grep gate
+  // enforces this — so production code paths are unaffected.
+  if (validator.bypass) {
+    if (out_claims) {
+      *out_claims = Claims{
+          /* subject  */ "test-subject",
+          /* issuer   */ validator.issuer,
+          /* audience */ validator.audience,
+      };
+    }
+    if (out_reason) *out_reason = kReasonBypass;
+    return grpc::Status::OK;
+  }
+
   auto it = client_metadata.find(grpc::string_ref(kAuthHeader));
   if (it == client_metadata.end()) {
     if (out_reason) *out_reason = kReasonMissingHeader;

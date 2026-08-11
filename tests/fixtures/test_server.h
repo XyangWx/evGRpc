@@ -32,6 +32,21 @@ class PgContainer;
 // thread at a time. Multi-threaded usage is not supported in v1.
 class TestServer {
  public:
+  // Per-instance configuration for the in-process gRPC fixture. The
+  // `no_auth` flag flips JwtValidator into test-mode bypass so RPCs
+  // issued without bearer-token credentials succeed end-to-end; tests
+  // that don't care about auth (e.g. service-shape coverage) use this
+  // path so they don't have to mint an RS256 JWT per call. When false,
+  // the existing JWKS HTTP server bringup runs unchanged.
+  //
+  // Nested inside TestServer (not a free TestServerOptions) because it
+  // is exclusively a test-fixture knob and should not leak into the
+  // production namespace.
+  struct Options {
+    bool no_auth = false;
+    std::shared_ptr<PgContainer> pg;
+  };
+  explicit TestServer(Options opts);
   explicit TestServer(std::shared_ptr<PgContainer> pg);
   ~TestServer();
   TestServer(const TestServer&) = delete;

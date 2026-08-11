@@ -157,61 +157,76 @@ class BearerTokenPlugin final : public grpc::MetadataCredentialsPlugin {
 
 class TestServer::Impl {
  public:
-  Impl(std::shared_ptr<PgContainer> pg) {
+  Impl(TestServer::Options opts) {
     // 1. RSA keypair — generated once, used for all token signing +
     //    JWKS serving during this fixture's lifetime.
     keypair_ = GenerateRsaKeyPair("test-kid");
     issuer_ = "https://test-idp";
     audience_ = "evgrpc";
 
-    // 2. cpp-httplib HTTP server on a random localhost port.
-    //    httplib::Server::bind_to_any_port picks port 0 and resolves
-    //    the kernel-assigned port; we capture the returned int.
-    jwks_http_ = std::make_unique<httplib::Server>();
-    const std::string jwks_json =
-        PemToJwksJson(keypair_.pem_public, keypair_.kid);
-    jwks_http_->Get("/.well-known/jwks.json",
-                    [jwks_json](const httplib::Request&,
-                                httplib::Response& res) {
-                      res.set_content(jwks_json, "application/json");
-                    });
-    jwks_http_->Get("/jwks.json",
-                    [jwks_json](const httplib::Request&,
-                                httplib::Response& res) {
-                      // Convenience alias for tests that hardcode
-                      // "/jwks.json" rather than the OIDC well-known
-                      // path.
-                      res.set_content(jwks_json, "application/json");
-                    });
-    const int http_port = jwks_http_->bind_to_any_port("127.0.0.1");
-    if (http_port <= 0) {
-      throw std::runtime_error("TestServer: failed to bind JWKS HTTP port");
-    }
-    // httplib::Server::listen_after_bind() runs the accept loop on the
-    // calling thread. Spawn a daemon thread and detach; the server
-    // lifetime is bound to jwks_http_ (RAII + ~TestServer::Impl calls
-    // jwks_http_->stop()).
-    std::thread([s = jwks_http_.get()]() { s->listen_after_bind(); }).detach();
-    jwks_url_ = "http://127.0.0.1:" + std::to_string(http_port) +
-                "/.well-known/jwks.json";
+    if (opts.no_auth) {
+      // no_auth mode: skip JWKS HTTP server bringup entirely. The
+      // validator runs in bypass (synthetic-claim) mode, so it never
+      // needs to resolve a kid against a JWKS endpoint. jwks_url_ is
+      // left empty; tests that read OauthIssuerUrl()/JwksUrl() under
+      // bypass should not rely on those values.
+      validator_.issuer = issuer_;
+      validator_.audience = audience_;
+      // The one and only place this assignment may appear in the repo
+      // — spec §10.5 grep gate. Every other test path must use the
+      // named kEnableBypassForTest constant.
+      validator_.bypass = true;
+      jwks_disabled_ = true;
+    } else {
+      // 2. cpp-httplib HTTP server on a random localhost port.
+      //    httplib::Server::bind_to_any_port picks port 0 and resolves
+      //    the kernel-assigned port; we capture the returned int.
+      jwks_http_ = std::make_unique<httplib::Server>();
+      const std::string jwks_json =
+          PemToJwksJson(keypair_.pem_public, keypair_.kid);
+      jwks_http_->Get("/.well-known/jwks.json",
+                      [jwks_json](const httplib::Request&,
+                                  httplib::Response& res) {
+                        res.set_content(jwks_json, "application/json");
+                      });
+      jwks_http_->Get("/jwks.json",
+                      [jwks_json](const httplib::Request&,
+                                  httplib::Response& res) {
+                        // Convenience alias for tests that hardcode
+                        // "/jwks.json" rather than the OIDC well-known
+                        // path.
+                        res.set_content(jwks_json, "application/json");
+                      });
+      const int http_port = jwks_http_->bind_to_any_port("127.0.0.1");
+      if (http_port <= 0) {
+        throw std::runtime_error("TestServer: failed to bind JWKS HTTP port");
+      }
+      // httplib::Server::listen_after_bind() runs the accept loop on the
+      // calling thread. Spawn a daemon thread and detach; the server
+      // lifetime is bound to jwks_http_ (RAII + ~TestServer::Impl calls
+      // jwks_http_->stop()).
+      std::thread([s = jwks_http_.get()]() { s->listen_after_bind(); }).detach();
+      jwks_url_ = "http://127.0.0.1:" + std::to_string(http_port) +
+                  "/.well-known/jwks.json";
 
-    // 3. JwtValidator. resolve_key reads from a static map keyed by
-    //    `kid`; the map is populated once and never changes for the
-    //    lifetime of the fixture.
-    static const std::unordered_map<std::string, std::string>* kKeyMap =
-        new std::unordered_map<std::string, std::string>{
-            {keypair_.kid, keypair_.pem_public}};
-    validator_.issuer = issuer_;
-    validator_.audience = audience_;
-    validator_.resolve_key = [](const std::string& kid)
-        -> std::optional<std::string> {
-      auto it = kKeyMap->find(kid);
-      if (it == kKeyMap->end()) return std::nullopt;
-      return it->second;
-    };
+      // 3. JwtValidator. resolve_key reads from a static map keyed by
+      //    `kid`; the map is populated once and never changes for the
+      //    lifetime of the fixture.
+      static const std::unordered_map<std::string, std::string>* kKeyMap =
+          new std::unordered_map<std::string, std::string>{
+              {keypair_.kid, keypair_.pem_public}};
+      validator_.issuer = issuer_;
+      validator_.audience = audience_;
+      validator_.resolve_key = [](const std::string& kid)
+          -> std::optional<std::string> {
+        auto it = kKeyMap->find(kid);
+        if (it == kKeyMap->end()) return std::nullopt;
+        return it->second;
+      };
+    }
 
     // 4. PgPool wired to the test container's libpq conninfo.
-    pool_ = std::make_unique<PgPool>(pg->Conninfo(), /*size=*/2);
+    pool_ = std::make_unique<PgPool>(opts.pg->Conninfo(), /*size=*/2);
 
     // 5. gRPC server with all 6 services.
     grpc::ServerBuilder builder;
@@ -257,7 +272,10 @@ class TestServer::Impl {
 
   ~Impl() {
     if (grpc_server_) grpc_server_->Shutdown();
-    if (jwks_http_) jwks_http_->stop();
+    // Skip the stop() call when no_auth mode never bound the JWKS HTTP
+    // server (jwks_http_ stays null and the destructor gate below is a
+    // no-op anyway, but the explicit flag documents intent).
+    if (jwks_http_ && !jwks_disabled_) jwks_http_->stop();
   }
 
   RsaKeyPair keypair_;
@@ -268,12 +286,19 @@ class TestServer::Impl {
   std::unique_ptr<PgPool> pool_;
   JwtValidator validator_;
   std::unique_ptr<httplib::Server> jwks_http_;
+  // True when no_auth mode skipped JWKS HTTP bringup. jwks_http_ stays
+  // null in that case; the destructor gate reads this flag for symmetry
+  // / future-proofing.
+  bool jwks_disabled_ = false;
   std::unique_ptr<grpc::Server> grpc_server_;
   std::vector<std::unique_ptr<grpc::Service>> services_;
 };
 
+TestServer::TestServer(Options opts)
+    : impl_(std::make_unique<Impl>(std::move(opts))) {}
+
 TestServer::TestServer(std::shared_ptr<PgContainer> pg)
-    : impl_(std::make_unique<Impl>(std::move(pg))) {}
+    : impl_(std::make_unique<Impl>(Options{ .pg = std::move(pg) })) {}
 TestServer::~TestServer() = default;
 
 const RsaKeyPair& TestServer::KeyPair() const noexcept {
