@@ -108,4 +108,35 @@ TEST_F(ConsumptionServiceIT, CreateConsumption_HighestTempLtLowest_InvalidArgume
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Task 25: GetConsumption happy path. Uses the auto-creating
+// CreateConsumptionId helper (which also auto-creates the
+// prerequisite weather row) so the test focuses on the GET RPC
+// round-trip. Asserts both id and vehicle_id round-trip — weather_id
+// isn't asserted because the helper hides that FK.
+TEST_F(ConsumptionServiceIT, GetConsumption_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+  auto stub = ConsumptionService::NewStub(channel());
+  GetConsumptionRequest greq;
+  greq.set_id(cid);
+  Consumption got;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumption(&ctx, greq, &got).ok());
+  EXPECT_EQ(got.id(), cid);
+  EXPECT_EQ(got.vehicle_id(), vid);
+}
+
+// Task 25: GetConsumption with an all-zero UUID — exercises the
+// NOT_FOUND branch (no row exists, server returns 0 rows from
+// SELECT).
+TEST_F(ConsumptionServiceIT, GetConsumption_NotFound) {
+  auto stub = ConsumptionService::NewStub(channel());
+  GetConsumptionRequest req;
+  req.set_id("00000000-0000-0000-0000-000000000000");
+  Consumption got;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetConsumption(&ctx, req, &got);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
 }  // namespace evgrpc::test
