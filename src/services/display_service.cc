@@ -54,6 +54,23 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
     pqxx::nontransaction tx(*conn);
     auto start_ts = MaybeTimestamp(req->start_time());
     auto end_ts = MaybeTimestamp(req->end_time());
+    // Reachable-INTERNAL pre-check: the aggregation CTE below always
+    // returns 1 row (via COALESCE-on-empty-set), so `result.empty()`
+    // is unreachable through the public API. This EXISTS pre-check
+    // makes the INTERNAL "no aggregate row" branch actually fire when
+    // the filter matches zero rows (the case Chunk 5 spec promises).
+    auto exists = db::Exec(tx,
+        "SELECT EXISTS(SELECT 1 FROM charging "
+        "WHERE ($1 = '' OR VehicleId = $1) "
+        "AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
+        "AND ($3::TIMESTAMP IS NULL OR StartTime <= $3)) AS has_data",
+        "DisplayService.GetVehicleCostSummary.exists",
+        req->vehicle_id(), start_ts, end_ts);
+    if (!exists.empty() && !exists[0][0].as<bool>()) {
+      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      scope.set_status(s);
+      return s;
+    }
     auto result = db::Exec(tx,
         // Two CTEs: charging aggregates, consumption aggregates (for
         // total km). Combined in one SELECT to save a round-trip.
@@ -123,6 +140,21 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
+    // Reachable-INTERNAL pre-check: see GetVehicleCostSummary above.
+    // Same COALESCE-on-empty-set makes `result.empty()` unreachable;
+    // EXISTS pre-check fires INTERNAL when the month+vehicle filter
+    // matches zero rows.
+    auto exists = db::Exec(tx,
+        "SELECT EXISTS(SELECT 1 FROM charging "
+        "WHERE EXTRACT(YEAR FROM StartTime) = $1 AND EXTRACT(MONTH FROM StartTime) = $2 "
+        "AND ($3 = '' OR VehicleId = $3)) AS has_data",
+        "DisplayService.GetMonthlyReport.exists",
+        req->year(), req->month(), req->vehicle_id());
+    if (!exists.empty() && !exists[0][0].as<bool>()) {
+      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      scope.set_status(s);
+      return s;
+    }
     // Single-query aggregation: SUM(Cost), SUM(KwhCharged), plus the
     // SUM of (end - start) mileage from the consumption table for the
     // matching month. Optional vehicle filter via WHERE VehicleId=$N.
@@ -195,6 +227,19 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
+    // Reachable-INTERNAL pre-check: see GetVehicleCostSummary above.
+    // For annual reports the filter is year + optional vehicle_id.
+    auto exists = db::Exec(tx,
+        "SELECT EXISTS(SELECT 1 FROM charging "
+        "WHERE EXTRACT(YEAR FROM StartTime) = $1 "
+        "AND ($2 = '' OR VehicleId = $2)) AS has_data",
+        "DisplayService.GetAnnualReport.exists",
+        req->year(), req->vehicle_id());
+    if (!exists.empty() && !exists[0][0].as<bool>()) {
+      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      scope.set_status(s);
+      return s;
+    }
     pqxx::params p;
     p.append(req->year());
     if (!req->vehicle_id().empty()) p.append(req->vehicle_id());
@@ -543,7 +588,7 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
         "      FROM charging ch "
         "      WHERE ch.VehicleId = c.VehicleId "
         "        AND ch.StartTime >= c.\"Start\" - INTERVAL '24 hours' "
-        "        AND ch.StartTime <= c.\"End\""
+        "        AND ch.StartTime <= c.\"EndTime\""
         "    ), 0)::DOUBLE PRECISION AS kwh "
         "  FROM consumption c "
         "  WHERE ($1::TEXT IS NULL OR c.VehicleId = $1) "
