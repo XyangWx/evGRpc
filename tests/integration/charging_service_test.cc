@@ -60,4 +60,55 @@ TEST_F(ChargingServiceIT, DataHelpers_ProduceValidIds) {
   EXPECT_EQ(cid.size(), 36u);
 }
 
+// Task 16: CreateCharging happy path. Exercises the full helper
+// chain — vehicle → source_category → CreateCharging — and asserts
+// the server-set id is non-empty and the FK refs round-trip
+// unchanged in the response.
+TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+  const auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  Charging resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateCharging(&ctx, req, &resp).ok());
+  EXPECT_FALSE(resp.id().empty());
+  EXPECT_EQ(resp.vehicle_id(), vid);
+  EXPECT_EQ(resp.source_category_id(), sid);
+}
+
+// Task 16: CreateCharging with a non-existent vehicle FK. The
+// production handler is expected to surface this as INVALID_ARGUMENT
+// (the validator / FK pre-check rejects before the DB round-trip).
+TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
+  auto chan = channel();
+  const auto sid = data::CreateSourceCategoryId(chan);  // real
+  auto stub = ChargingService::NewStub(chan);
+  auto req = data::MakeValidCreateChargingRequest(
+      "00000000-0000-0000-0000-000000000000",  // non-existent vehicle
+      sid);
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// Task 16: CreateCharging with kwh_charged=0.0. Production
+// ValidateCharging rejects this as INVALID_ARGUMENT before any DB
+// I/O — so the test asserts the validation surface, not the FK
+// surface.
+TEST_F(ChargingServiceIT, CreateCharging_NonPositiveKwh_InvalidArgument) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.set_kwh_charged(0.0);  // validator catches before DB
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
