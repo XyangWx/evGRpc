@@ -144,4 +144,85 @@ TEST_F(ChargingServiceIT, GetCharging_NotFound) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
+// Task 18: UpdateCharging happy path. Creates a charging via the
+// helper chain, then issues an Update that overrides kwh_charged
+// (50.0 -> 60.0). The template comes from a fresh
+// MakeValidCreateChargingRequest (so all validator-required fields
+// stay valid), converted to UpdateChargingRequest via the
+// ToUpdateChargingRequest helper. Asserts the response echoes the
+// new kwh and the same id as the create — proves the SQL UPDATE
+// found the row, applied the change, and round-tripped through
+// the gRPC layer.
+TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+  // Create first to get a valid id
+  Charging created;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateCharging(
+      &c1, data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
+  // Build update request from a fresh valid template + override kwh
+  auto template_req = data::MakeValidCreateChargingRequest(vid, sid);
+  template_req.set_kwh_charged(60.0);  // the change
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(template_req);
+  ureq.set_id(created.id());
+  Charging resp;
+  grpc::ClientContext c2;
+  ASSERT_TRUE(stub->UpdateCharging(&c2, ureq, &resp).ok());
+  EXPECT_EQ(resp.kwh_charged(), 60.0);
+  EXPECT_EQ(resp.id(), created.id());
+}
+
+// Task 18: UpdateCharging with an id that does not exist (all-zero
+// UUID). The template is fully-valid (from MakeValidCreateChargingRequest +
+// ToUpdateChargingRequest), so ValidateCharging passes; the SQL UPDATE
+// finds 0 rows and production surfaces NOT_FOUND. Confirms the
+// handler distinguishes "bad input" (INVALID_ARGUMENT) from "target
+// row missing" (NOT_FOUND) — the validator runs first, then DB.
+TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+  // Build a fully-valid update request but with a non-existent id.
+  // The validator (re-run inside UpdateCharging) passes because all
+  // template fields are valid; the SQL UPDATE finds 0 rows → NOT_FOUND.
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(
+      data::MakeValidCreateChargingRequest(vid, sid));
+  ureq.set_id("00000000-0000-0000-0000-000000000000");
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->UpdateCharging(&ctx, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
+// Task 18: UpdateCharging with end_time == start_time. ValidateCharging
+// requires end_time > start_time; setting them equal (proto3 mutable_X
+// pattern returns a Timestamp* that we can assign the start_time
+// Timestamp value into) makes the validator reject the request as
+// INVALID_ARGUMENT before any DB I/O. Same surface as the
+// CreateCharging validator, but exercised via the Update path so the
+// validator's reuse on Update is regression-guarded.
+TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+  Charging created;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateCharging(
+      &c1, data::MakeValidCreateChargingRequest(vid, sid), &created).ok());
+  // Build update request where end_time == start_time (validator rejects)
+  auto template_req = data::MakeValidCreateChargingRequest(vid, sid);
+  *template_req.mutable_end_time() = template_req.start_time();
+  UpdateChargingRequest ureq = data::ToUpdateChargingRequest(template_req);
+  ureq.set_id(created.id());
+  Charging resp;
+  grpc::ClientContext c2;
+  grpc::Status st = stub->UpdateCharging(&c2, ureq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
