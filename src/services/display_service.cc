@@ -308,14 +308,14 @@ grpc::Status DisplayServiceImpl::GetCostByChargerType(
         "       COALESCE(SUM(Cost), 0)::DOUBLE PRECISION AS total_cost, "
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "FROM charging "
-        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
         "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
         "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
         "GROUP BY ChargerType "
         "ORDER BY ChargerType",
         "DisplayService.GetCostByChargerType",
         // Optional vehicle_id: bind std::nullopt when unset so SQL
-        // gets NULL and the `($1::TEXT IS NULL OR VehicleId = $1)`
+        // gets NULL and the `($1::TEXT IS NULL OR VehicleId::text = $1)`
         // predicate is satisfied (matches all vehicles).
         req->vehicle_id().empty() ? std::optional<std::string>{}
                                     : std::optional<std::string>{req->vehicle_id()},
@@ -426,7 +426,7 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "SELECT VehicleId, "
         "       COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "FROM consumption "
-        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
         "  AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
         "  AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
         "GROUP BY VehicleId",
@@ -440,7 +440,7 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "SELECT VehicleId, "
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "FROM charging "
-        "WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
         "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
         "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
         "GROUP BY VehicleId",
@@ -510,14 +510,14 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
         "FROM ("
         "  SELECT VehicleId, SUM(StartRange - EndRange) AS dashboard_range "
         "  FROM charging "
-        "  WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "  WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
         "    AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
         "    AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
         "  GROUP BY VehicleId"
         ") d FULL OUTER JOIN ("
         "  SELECT VehicleId, SUM(EndMileage - BeginMileage) AS actual_mileage "
         "  FROM consumption "
-        "  WHERE ($1::TEXT IS NULL OR VehicleId = $1) "
+        "  WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
         "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
         "    AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
         "  GROUP BY VehicleId"
