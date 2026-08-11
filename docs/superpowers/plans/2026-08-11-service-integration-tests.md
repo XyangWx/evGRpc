@@ -49,10 +49,10 @@ Tasks 1-6 set up everything the per-service tests depend on. After Chunk 1, `cte
 
 - [ ] **Step 1: Write failing test for `bypass=false` default behavior**
 
-Add to `tests/unit/test_jwt_validator.cc`:
+Add to `tests/unit/test_jwt_validator.cc`. **Note:** the existing `JwtValidatorTest` suite uses `TEST_F` with a fixture whose `resolve_key` lambda would mask the negative case here. The new tests use `TEST` (no fixture) under a separate suite name to avoid that pollution; either `JwtValidatorTest` (rejected — gtest forbids mixing `TEST` and `TEST_F` under the same suite) or `JwtValidatorNoFixture` (chosen at implementation). The pre-existing 6 `JwtValidatorTest` tests are untouched.
 
 ```cpp
-TEST(JwtValidatorTest, BypassDefaultsToFalse) {
+TEST(JwtValidatorNoFixture, BypassDefaultsToFalse) {
   JwtValidator v;
   v.issuer = "iss";
   v.audience = "aud";
