@@ -3387,8 +3387,8 @@ Expected: prints version. (Comes with lcov.)
 
 - [ ] **Step 3: Document local toolchain**
 
-Run: `lcov --version | head -1 > /tmp/lcov-version.txt && uname -a >> /tmp/lcov-version.txt && cat /tmp/lcov-version.txt`
-Expected: shows lcov version + OS. Document in script header comment so future readers know what was tested.
+Run: `lcov --version && uname -a`
+Expected: prints lcov version + OS info. Just visual verification — no /tmp file needed. Document the versions found in the commit message of Task 47.
 
 ---
 
@@ -3425,6 +3425,10 @@ readonly RUNTIME_THRESHOLD="${RUNTIME_THRESHOLD:-75}"  # wall-clock seconds
 readonly SERVICES_DIR="src/services"
 
 # --- Pre-flight ---
+# Ensure CWD is the repo root, regardless of how the script is invoked.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 if ! command -v lcov >/dev/null || ! command -v genhtml >/dev/null; then
   echo "ERROR: lcov/genhtml not found. Install via 'apt install lcov' or 'brew install lcov'." >&2
   exit 1
@@ -3455,33 +3459,69 @@ if (( ELAPSED > RUNTIME_THRESHOLD )); then
 fi
 
 # --- lcov capture + summary ---
+# Capture ALL .cc files (spec §6 scope: services + critical integration like
+# db/exec, db/pool, fixtures/pg_container, config/config_loader). Threshold
+# check below parses only src/services/*.cc rows from the per-file summary.
 echo ">>> Capturing coverage ..."
 COVERAGE_INFO="$BUILD_DIR/coverage.info"
 lcov --capture --directory "$BUILD_DIR" \
      --output-file "$COVERAGE_INFO" \
-     --include "*/$SERVICES_DIR/*.cc" \
      --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*' \
      --ignore-errors mismatch
 
-echo ">>> Coverage summary:"
-SUMMARY=$(lcov --summary "$COVERAGE_INFO" 2>&1 | grep '^lines')
-echo "$SUMMARY"
+echo ">>> Services coverage summary:"
+lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
+  /^src\/services\/[^ ]*\.cc/ {
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^[0-9]+\.[0-9]+%$/) {
+        gsub(/%/, "", $i)
+        sum += $i
+        n++
+        break
+      }
+    }
+  }
+  END {
+    if (n > 0) printf "lines average across %d services files: %.1f%%\n", n, sum/n
+    else print "ERROR: no src/services/*.cc files in coverage.info" >&2
+  }
+'
 
-# Parse "lines......: 95.0% (123/129)" → 95.0
-COVERAGE_PCT=$(echo "$SUMMARY" | sed -n 's/.*: \([0-9.]*\)%.*/\1/p')
+# Average services coverage as float, e.g. "95.4"
+COVERAGE_PCT=$(lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
+  /^src\/services\/[^ ]*\.cc/ {
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^[0-9]+\.[0-9]+%$/) {
+        gsub(/%/, "", $i)
+        sum += $i
+        n++
+        break
+      }
+    }
+  }
+  END { if (n > 0) printf "%.1f", sum/n; else print "" }
+')
+
+# Robust parse: empty COVERAGE_PCT → clear diagnostic, not cryptic arithmetic error.
+if [[ -z "${COVERAGE_PCT}" ]]; then
+  echo "ERROR: failed to parse services coverage from lcov summary." >&2
+  exit 1
+fi
 # Integer comparison: float-to-int via printf "%.0f"
 COVERAGE_PCT_INT=$(printf "%.0f" "$COVERAGE_PCT")
 
 if (( COVERAGE_PCT_INT < COVERAGE_THRESHOLD )); then
   echo "ERROR: $SERVICES_DIR coverage ${COVERAGE_PCT}% < ${COVERAGE_THRESHOLD}% threshold." >&2
-  echo ">>> HTML: file://$BUILD_DIR/coverage_html/index.html"
+  ABS_HTML="$(cd "$BUILD_DIR" && pwd)/coverage_html/index.html"
+  echo ">>> HTML: file://${ABS_HTML}"
   exit 1
 fi
 
 # --- HTML ---
 echo ">>> Generating HTML report ..."
 genhtml "$COVERAGE_INFO" --output-directory "$BUILD_DIR/coverage_html" >/dev/null
-echo ">>> HTML: file://$BUILD_DIR/coverage_html/index.html"
+ABS_HTML="$(cd "$BUILD_DIR" && pwd)/coverage_html/index.html"
+echo ">>> HTML: file://${ABS_HTML}"
 echo ">>> Coverage ${COVERAGE_PCT}% ≥ ${COVERAGE_THRESHOLD}% threshold — PASS"
 ```
 
@@ -3491,18 +3531,18 @@ echo ">>> Coverage ${COVERAGE_PCT}% ≥ ${COVERAGE_THRESHOLD}% threshold — PAS
 chmod +x scripts/coverage.sh
 ```
 
-- [ ] **Step 3: Smoke test (off-threshold so we can verify failure path)**
+- [ ] **Step 3: Smoke test (verify both fail path and pass path)**
 
-Run:
+FirstRun (force fail path with threshold = 999):
 ```bash
 DATABASE_URL='postgresql://vegrpc_admin:***@127.0.0.1:5432/evgrpc' \
 EVGRPC_TEST_DATABASE_URL="$DATABASE_URL" \
 COVERAGE_THRESHOLD=999 \
 ./scripts/coverage.sh
 ```
-Expected: prints coverage ≥, exits 0 (because we set threshold artificially high).
+Expected: prints "ERROR: ... coverage XX% < 999% threshold", exits 1 — verifies the failure branch.
 
-Then run without the override:
+SecondRun (default threshold, real pass path):
 ```bash
 DATABASE_URL='postgresql://vegrpc_admin:***@127.0.0.1:5432/evgrpc' \
 EVGRPC_TEST_DATABASE_URL="$DATABASE_URL" \
@@ -3519,40 +3559,17 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(ci): 
 
 ---
 
-### Task 48: Verify the script integrates with `ctest`
+### Task 48: REMOVED — ctest label for coverage adds friction without value
 
-**Files:**
-- Modify: `CMakeLists.txt` (top-level) — optional `add_test(NAME coverage COMMAND ...)` for `ctest -L coverage` or similar
+Originally planned as an optional CMake target, but on review the friction outweighs the benefit:
 
-- [ ] **Step 1: (Optional) Add a CTest label so the script can run via `ctest -L coverage`**
+(a) It requires `cmake-build-cov` to have been configured with `-DEVGRPC_COVERAGE=ON` *separately* from the main build dir, otherwise `coverage.sh`'s `cmake -S . -B cmake-build-cov -DEVGRPC_COVERAGE=ON` reconfigures but doesn't recompile existing artifacts.
+(b) It requires a re-configure of the main build dir just to register the label.
+(c) The script is already idempotent and self-contained — operators will just run it directly via `./scripts/coverage.sh`.
 
-If desired, add to top-level `CMakeLists.txt`:
+If a CI driver needs `ctest -L coverage`, a one-line alternative is to call the script from `.github/workflows/coverage.yml` (or similar) directly — no CMake glue needed.
 
-```cmake
-add_test(
-  NAME coverage
-  COMMAND ${CMAKE_SOURCE_DIR}/scripts/coverage.sh
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(coverage PROPERTIES LABELS "coverage" TIMEOUT 300)
-```
-
-Note: this `coverage` test depends on `EVGRPC_COVERAGE=ON` being set at configure time (set up by Task 6). Document this in the test's `TIMEOUT`.
-
-- [ ] **Step 2: Run via ctest**
-
-```bash
-ctest -L coverage --output-on-failure
-```
-
-Expected: passes (delegates to `scripts/coverage.sh`).
-
-- [ ] **Step 3: Commit (if changed)**
-
-```bash
-git add CMakeLists.txt
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "build(cmake): add 'coverage' ctest label wrapping scripts/coverage.sh"
-```
+(Skipped — no Task 48 actions.)
 
 ---
 
@@ -3563,7 +3580,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "build(cmak
 
 - [ ] **Step 1: Add a "Coverage" section to README.md**
 
-Append before the existing "Tests" section (or as a new H2):
+Append before the existing `## Test (host)` section (or as a new H2):
 
 ```markdown
 ## Coverage
@@ -3592,14 +3609,25 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "docs: READ
 
 ### Task 50: End-to-end smoke — run the full pipeline
 
-- [ ] **Step 1: Verify the script runs from a clean state**
+- [ ] **Step 1: Verify the script runs from a clean state (opt-in destructive)**
 
+The script's `cmake -S . -B cmake-build-cov` step overwrites the build dir safely, but the optional `rm -rf cmake-build-cov` is destructive. Gate it behind `CLEAN=1` so the smoke is non-destructive by default.
+
+Run (non-destructive):
 ```bash
-rm -rf cmake-build-cov
 DATABASE_URL='postgresql://vegrpc_admin:***@127.0.0.1:5432/evgrpc' \
 EVGRPC_TEST_DATABASE_URL="$DATABASE_URL" \
 ./scripts/coverage.sh
 ```
+
+Run (clean rebuild):
+```bash
+rm -rf cmake-build-cov  # operator-initiated; one-line cleanup
+DATABASE_URL='postgresql://vegrpc_admin:***@127.0.0.1:5432/evgrpc' \
+EVGRPC_TEST_DATABASE_URL="$DATABASE_URL" \
+CLEAN=1 ./scripts/coverage.sh
+```
+(NB: the `CLEAN=1` env var is currently a documentation hook — the script doesn't actually read it. If the operator wants the script to handle cleanup itself, future enhancement: add `[[ "${CLEAN:-0}" == "1" ]] && rm -rf "$BUILD_DIR"` near the top of the script.)
 
 Expected: complete in under 5 min (configure + build + run tests + lcov + genhtml). Final line: "Coverage XX% ≥ 95% threshold — PASS" or "ERROR: ... < 95% threshold".
 
