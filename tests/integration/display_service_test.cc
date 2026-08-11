@@ -96,6 +96,42 @@ TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_Internal) {
       << st.error_message();
 }
 
+// Task 33: GetMonthlyReport happy path. Seeding uses Nov 2023
+// (1700000000 epoch), so year=2023 month=11 hits the seeded data.
+// Asserts year + month round-trip and total_cost > 0.
+TEST_F(DisplayServiceIT, GetMonthlyReport_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(2023);   // helper data is in Nov 2023
+  req.set_month(11);
+  req.set_vehicle_id(vid);  // optional
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetMonthlyReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.year(), 2023);
+  EXPECT_EQ(resp.month(), 11);
+  EXPECT_GT(resp.total_cost(), 0.0);
+}
+
+// Task 33: GetMonthlyReport with future year → no data → INTERNAL
+// "no aggregate row". Same branch as Task 32, reached via the
+// precursor's EXISTS pre-check on year/month/vehicle filter.
+TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(2099);  // future year, no data
+  req.set_month(1);
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
