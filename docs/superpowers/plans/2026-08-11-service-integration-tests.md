@@ -263,7 +263,13 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 **Files:**
 - Create: `tests/fixtures/shared_pg.h`
 - Create: `tests/fixtures/shared_pg.cc`
-- Modify: `tests/fixtures/CMakeLists.txt`
+- Modify: `tests/fixtures/CMakeLists.txt` (add `shared_pg.cc` to source list + 2 build-enabling additions per "Build deps" below)
+
+**Build deps (architectural gaps caught by implementer at commit `f99c91a`):**
+
+1. **`gtest` PUBLIC link on `evgrpc_test_fixtures`**: `shared_pg.h` derives `SharedPgEnvironment` from `::testing::Environment` (in `<gtest/gtest.h>`). Forward-declaration won't work — virtual override vtable needs the full type at link time. Add `gtest` to the existing PUBLIC link block alongside `httplib`, `grpc++`, etc.
+
+2. **`EVGRPC_TEST_SQL_PATH` compile def on `evgrpc_test_fixtures` PUBLIC**: `shared_pg.cc` references the macro at compile time, so the build depends on it being defined somewhere. The plan originally reserved this for Task 4 Step 4, but Task 3 can't build without it. Add `target_compile_definitions(evgrpc_test_fixtures PUBLIC EVGRPC_TEST_SQL_PATH="${CMAKE_SOURCE_DIR}/sql/001_initial.sql")` here. Task 4's later wiring on its own target becomes redundant (PUBLIC propagates the def).
 
 - [ ] **Step 1: Write `shared_pg.h`**
 
