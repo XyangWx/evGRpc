@@ -113,13 +113,13 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
     pqxx::work tx(*conn);
     auto id = NewUuid();
     db::Exec(tx,
-        "INSERT INTO consumption (Id, VehicleId, Start, End, "
+        "INSERT INTO consumption (Id, VehicleId, Start, EndTime, "
         "BeginPercent, EndPercent, BeginMileage, EndMileage, "
         "BeginRange, EndRange, HighestTemperature, LowestTemperature, "
         "WeatherId, Remark) VALUES "
         "($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, $10, "
         "$11, $12, $13, $14) "
-        "RETURNING Id, VehicleId, Start::text, End::text, BeginPercent, "
+        "RETURNING Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
         "ConsumptionService.CreateConsumption",
@@ -143,7 +143,7 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
     // Re-select to populate `resp` (the INSERT's RETURNING isn't
     // directly bindable through libpqxx 7.9.2's exec_params API).
     auto inserted = db::Exec(tx,
-        "SELECT Id, VehicleId, Start::text, End::text, BeginPercent, "
+        "SELECT Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark "
         "FROM consumption WHERE Id=$1",
@@ -180,7 +180,7 @@ grpc::Status ConsumptionServiceImpl::GetConsumption(
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
     auto result = db::Exec(tx,
-        "SELECT Id, VehicleId, Start::text, End::text, BeginPercent, "
+        "SELECT Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark "
         "FROM consumption WHERE Id = $1",
@@ -236,11 +236,11 @@ grpc::Status ConsumptionServiceImpl::UpdateConsumption(
     pqxx::work tx(*conn);
     auto result = db::Exec(tx,
         "UPDATE consumption SET VehicleId=$2, Start=$3::timestamptz, "
-        "End=$4::timestamptz, BeginPercent=$5, EndPercent=$6, "
+        "EndTime=$4::timestamptz, BeginPercent=$5, EndPercent=$6, "
         "BeginMileage=$7, EndMileage=$8, BeginRange=$9, EndRange=$10, "
         "HighestTemperature=$11, LowestTemperature=$12, WeatherId=$13, "
         "Remark=$14 WHERE Id=$1 "
-        "RETURNING Id, VehicleId, Start::text, End::text, BeginPercent, "
+        "RETURNING Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
         "ConsumptionService.UpdateConsumption",
@@ -317,7 +317,7 @@ grpc::Status ConsumptionServiceImpl::ListConsumptions(
 
     // Build WHERE incrementally based on which filters are set.
     std::string sql =
-        "SELECT Id, VehicleId, Start::text, End::text, BeginPercent, "
+        "SELECT Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark "
         "FROM consumption WHERE 1=1";
