@@ -139,7 +139,10 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(auth)
 **Files:**
 - Modify: `tests/fixtures/test_server.h`
 - Modify: `tests/fixtures/test_server.cc`
+- Modify: `src/auth/authenticate.cc` (architectural gap — see Note below)
 - Test: existing `evgrpc_e2e_tests` (smoke must still pass)
+
+**Architectural gap (caught by implementer at 0bbff6d):** `AuthenticateRpc(ctx, *validator_, method)` calls `evgrpc::Authenticate(...)` which checks the `authorization` header BEFORE `JwtValidator.Validate(token)`. In `no_auth` mode the test calls `grpc::ClientContext ctx;` with NO credentials, so `Authenticate()` rejects with `UNAUTHENTICATED: missing authorization header` before `JwtValidator.bypass` can fire. Fix: `Authenticate()` early-returns synthesized claims when `validator.bypass` is set (READS the flag — does NOT write `bypass = true`). New `kReasonBypass` reason code added. The §10.5 grep gate is unaffected because this change READS, never WRITES, the literal.
 
 - [ ] **Step 1: Run existing smoke test — confirm green baseline**
 
