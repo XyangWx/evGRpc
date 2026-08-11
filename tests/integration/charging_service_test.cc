@@ -267,4 +267,74 @@ TEST_F(ChargingServiceIT, DeleteCharging_NotFound) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
+// Task 20: ListChargings happy path. Mints 3 chargings via the helper
+// chain (vehicle + source_category + 3x CreateCharging), then issues
+// an unpaginated ListChargings and asserts all 3 rows come back with
+// an empty next_page_token (the no-more-pages sentinel). Uses `chan`
+// (not `channel`) to avoid shadowing ServiceITBase::channel().
+TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(
+        ChargingService::NewStub(chan)->CreateCharging(
+            &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  auto stub = ChargingService::NewStub(chan);
+  ListChargingsRequest req;
+  ListChargingsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.chargings_size(), 3);
+  EXPECT_TRUE(resp.next_page_token().empty());
+}
+
+// Task 20: ListChargings empty case. TruncateAll (per-test fixture)
+// has cleared all tables, so a default ListChargings request returns
+// an empty result with an empty next_page_token (no rows, no more
+// pages). Direct channel() call — no `chan` rename needed because
+// nothing here would shadow.
+TEST_F(ChargingServiceIT, ListChargings_Empty) {
+  auto stub = ChargingService::NewStub(channel());
+  ListChargingsRequest req;
+  ListChargingsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.chargings_size(), 0);
+  EXPECT_TRUE(resp.next_page_token().empty());
+}
+
+// Task 20: ListChargings pagination. Mints 5 chargings, requests
+// page_size=2 for the first page, asserts 2 rows come back with a
+// non-empty next_page_token (the has_more branch — server signals
+// there is more), then issues a second request with the token + same
+// page_size=2 and asserts another 2 rows come back. Exercises the
+// page-token encode/decode path through the gRPC layer. Uses `chan`
+// (not `channel`) to avoid shadowing ServiceITBase::channel().
+TEST_F(ChargingServiceIT, ListChargings_Pagination) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  for (int i = 0; i < 5; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(
+        ChargingService::NewStub(chan)->CreateCharging(
+            &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  auto stub = ChargingService::NewStub(chan);
+  // First page: page_size=2 → 2 rows + non-empty next_page_token
+  ListChargingsRequest req1; req1.set_page_size(2);
+  ListChargingsResponse resp1; grpc::ClientContext c1;
+  ASSERT_TRUE(stub->ListChargings(&c1, req1, &resp1).ok());
+  EXPECT_EQ(resp1.chargings_size(), 2);
+  EXPECT_FALSE(resp1.next_page_token().empty());
+  // Second page with token
+  ListChargingsRequest req2;
+  req2.set_page_size(2);
+  req2.set_page_token(resp1.next_page_token());
+  ListChargingsResponse resp2; grpc::ClientContext c2;
+  ASSERT_TRUE(stub->ListChargings(&c2, req2, &resp2).ok());
+  EXPECT_EQ(resp2.chargings_size(), 2);
+}
+
 }  // namespace evgrpc::test
