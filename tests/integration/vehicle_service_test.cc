@@ -88,6 +88,49 @@ TEST_F(VehicleServiceIT, CreateVehicle_EmptyLicensePlate_Accepted) {
   EXPECT_EQ(resp.license_plate(), "");
 }
 
+// GetVehicle happy-path: create → fetch → verify the row round-trips
+// with the same id + license_plate. Setup uses CreateVehicle (real DB
+// write) so the subsequent GetVehicle exercises the SELECT path
+// end-to-end — a synthetic GetVehicleRequest wouldn't catch a
+// mismatch between write and read (column drift, schema drift).
+TEST_F(VehicleServiceIT, GetVehicle_HappyPath) {
+  auto stub = VehicleService::NewStub(channel());
+  Vehicle created;
+  grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(),
+                                  &created).ok())
+      << "CreateVehicle (setup) RPC failed: error_message="
+      << ctx1.debug_error_string();
+
+  GetVehicleRequest greq;
+  greq.set_id(created.id());
+  Vehicle got;
+  grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->GetVehicle(&ctx2, greq, &got).ok())
+      << "GetVehicle (happy path) RPC failed: error_message="
+      << ctx2.debug_error_string();
+  EXPECT_EQ(got.id(), created.id());
+  EXPECT_EQ(got.license_plate(), created.license_plate());
+}
+
+// GetVehicle NOT_FOUND: a well-formed UUID that was never inserted
+// must return NOT_FOUND (verified in src/services/vehicle_service.cc
+// line ~104). Using a zero UUID (rather than FreshUuid) so the test
+// stays deterministic regardless of any prior fixture state — the
+// SetUpTestSuite TruncateAll guarantee + the probability that a real
+// UUID is all-zero is effectively zero means we won't collide.
+TEST_F(VehicleServiceIT, GetVehicle_NotFound) {
+  auto stub = VehicleService::NewStub(channel());
+  GetVehicleRequest req;
+  req.set_id("00000000-0000-0000-0000-000000000000");
+  Vehicle got;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetVehicle(&ctx, req, &got);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND)
+      << "Expected NOT_FOUND for missing id, got: " << st.error_code()
+      << " — " << st.error_message();
+}
+
 // Deferred runtime smoke from Chunk 2 Task 8: lives here (rather than
 // in test_data.cc) because VehicleServiceIT owns the fixture class
 // and Task 8's helpers are exercised by this file's other tests — so
