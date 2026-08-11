@@ -224,6 +224,65 @@ TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_Accepted) {
   EXPECT_EQ(resp.license_plate(), "");
 }
 
+// DeleteVehicle happy-path: create → delete → verify the row is actually
+// gone (post-condition check via GetVehicle). Mirrors the Task 10/11
+// pattern of using a real DB write in setup so we exercise the
+// DELETE-then-SELECT path end-to-end — a direct RPC against a
+// synthetic id would only prove the stub plumbing, not that the
+// DELETE actually persisted. Per src/services/vehicle_service.cc
+// line ~169, the impl returns NOT_FOUND when affected_rows()==0
+// and OK otherwise (the Empty response carries no payload).
+TEST_F(VehicleServiceIT, DeleteVehicle_HappyPath) {
+  auto stub = VehicleService::NewStub(channel());
+  Vehicle created;
+  grpc::ClientContext ctx1;
+  ASSERT_TRUE(stub->CreateVehicle(&ctx1, data::MakeValidCreateVehicleRequest(),
+                                  &created).ok())
+      << "CreateVehicle (setup) RPC failed: error_message="
+      << ctx1.debug_error_string();
+
+  DeleteVehicleRequest dreq;
+  dreq.set_id(created.id());
+  google::protobuf::Empty empty_resp;
+  grpc::ClientContext ctx2;
+  ASSERT_TRUE(stub->DeleteVehicle(&ctx2, dreq, &empty_resp).ok())
+      << "DeleteVehicle (happy path) RPC failed: error_message="
+      << ctx2.debug_error_string();
+
+  // Confirm the row is actually gone — the RPC alone only proves
+  // the stub plumbing + the impl accepted the call, not that the
+  // DELETE actually persisted.
+  GetVehicleRequest greq;
+  greq.set_id(created.id());
+  Vehicle got;
+  grpc::ClientContext ctx3;
+  grpc::Status st = stub->GetVehicle(&ctx3, greq, &got);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND)
+      << "Expected NOT_FOUND after DeleteVehicle, got: " << st.error_code()
+      << " — " << st.error_message();
+}
+
+// DeleteVehicle NOT_FOUND: a well-formed UUID that was never inserted
+// must return NOT_FOUND (verified in src/services/vehicle_service.cc
+// line ~169 — DELETE returns 0 rows when no row matches WHERE Id=$1,
+// and the impl maps affected_rows()==0 to NOT_FOUND). Using a zero
+// UUID (rather than FreshUuid) so the test stays deterministic
+// regardless of prior fixture state — the SetUpTestSuite TruncateAll
+// guarantee + the probability that a real UUID is all-zero is
+// effectively zero means we won't collide. Mirrors the regression-guard
+// pattern established by GetVehicle_NotFound / UpdateVehicle_NotFound.
+TEST_F(VehicleServiceIT, DeleteVehicle_NotFound) {
+  auto stub = VehicleService::NewStub(channel());
+  DeleteVehicleRequest dreq;
+  dreq.set_id("00000000-0000-0000-0000-000000000000");
+  google::protobuf::Empty resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->DeleteVehicle(&ctx, dreq, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND)
+      << "Expected NOT_FOUND for missing id, got: " << st.error_code()
+      << " — " << st.error_message();
+}
+
 // Deferred runtime smoke from Chunk 2 Task 8: lives here (rather than
 // in test_data.cc) because VehicleServiceIT owns the fixture class
 // and Task 8's helpers are exercised by this file's other tests — so
