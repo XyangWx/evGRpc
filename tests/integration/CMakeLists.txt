@@ -12,3 +12,28 @@ target_link_libraries(evgrpc_e2e_tests PRIVATE
   evgrpc_proto         # generated stubs (VehicleService::NewStub etc.)
 )
 add_test(NAME evgrpc_e2e_tests COMMAND evgrpc_e2e_tests)
+
+# Service-level integration tests: shared TestServer (one per suite) +
+# SharedPgEnvironment (one per process) + per-test TruncateAll. Each
+# service adds its own TEST_F(ServiceNameIT, ...) in Chunks 2-6 deriving
+# from ServiceITBase. Uses a custom main() (NOT gtest_main) so it can
+# install the SharedPgEnvironment as a global environment BEFORE the
+# gtest framework runs.
+add_executable(evgrpc_integration_tests
+  service_integration_main.cc
+  service_test_fixtures.cc
+)
+target_link_libraries(evgrpc_integration_tests PRIVATE
+  gtest                # InitGoogleTest / RUN_ALL_TESTS / TEST_F
+  # NO gtest_main — service_integration_main.cc provides its own main()
+  evgrpc_test_fixtures
+  evgrpc_proto
+)
+# Full-path include for `tests/integration/service_test_fixtures.h`
+# (the fixture's own .cc uses `#include "tests/integration/..."`,
+# which only resolves against the project root, not against the
+# `tests/` include dir evgrpc_test_fixtures exposes).
+target_include_directories(evgrpc_integration_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}
+)
+add_test(NAME evgrpc_integration_tests COMMAND evgrpc_integration_tests)
