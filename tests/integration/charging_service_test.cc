@@ -111,4 +111,37 @@ TEST_F(ChargingServiceIT, CreateCharging_NonPositiveKwh_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Task 17: GetCharging happy path. Exercises the full helper chain
+// (vehicle → source_category → CreateChargingId) to mint a real id,
+// then GetCharging and asserts the server returns the same id
+// (proving the id round-trips through the DB and the gRPC layer).
+TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  const auto cid = data::CreateChargingId(chan, vid, sid);
+  auto stub = ChargingService::NewStub(chan);
+  GetChargingRequest greq;
+  greq.set_id(cid);
+  Charging got;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCharging(&ctx, greq, &got).ok());
+  EXPECT_EQ(got.id(), cid);
+}
+
+// Task 17: GetCharging with an id that does not exist (all-zero UUID).
+// Production GetCharging is expected to surface this as NOT_FOUND
+// (the SQL SELECT returns 0 rows). The all-zero UUID is a valid
+// UUIDv4 shape so it parses cleanly; it's the canonical "not found"
+// sentinel used elsewhere in the suite.
+TEST_F(ChargingServiceIT, GetCharging_NotFound) {
+  auto stub = ChargingService::NewStub(channel());
+  GetChargingRequest req;
+  req.set_id("00000000-0000-0000-0000-000000000000");
+  Charging got;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetCharging(&ctx, req, &got);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
 }  // namespace evgrpc::test
