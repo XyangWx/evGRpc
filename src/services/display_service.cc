@@ -588,7 +588,7 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
         "      FROM charging ch "
         "      WHERE ch.VehicleId = c.VehicleId "
         "        AND ch.StartTime >= c.Start - INTERVAL '24 hours' "
-        "        AND ch.StartTime <= c.\"EndTime\""
+        "        AND ch.StartTime <= c.EndTime"
         "    ), 0)::DOUBLE PRECISION AS kwh "
         "  FROM consumption c "
         "  WHERE ($1::TEXT IS NULL OR c.VehicleId::text = $1) "
