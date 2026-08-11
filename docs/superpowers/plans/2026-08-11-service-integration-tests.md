@@ -1344,16 +1344,14 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ### Task 17: `GetCharging` (2 cases)
 
-- [ ] **Step 1: Write happy-path test (uses CreateChargingId helper)**
+- [ ] **Step 1: Write happy-path test (uses full helper chain)**
 
 ```cpp
 TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
   auto channel = ServiceITBase::channel();
-  const auto cid = data::CreateChargingId(channel, /* vid+ */ "", "");
-  // Need vid/sid — replace the line above with the helper calls:
-  // const auto vid = data::CreateVehicleId(channel);
-  // const auto sid = data::CreateSourceCategoryId(channel);
-  // const auto cid = data::CreateChargingId(channel, vid, sid);
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  const auto cid = data::CreateChargingId(channel, vid, sid);
   auto stub = ChargingService::NewStub(channel);
   GetChargingRequest greq; greq.set_id(cid);
   Charging got; grpc::ClientContext ctx;
@@ -1361,8 +1359,6 @@ TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
   EXPECT_EQ(got.id(), cid);
 }
 ```
-
-(Note for implementer: the comment-in-comments above is a copy/paste artifact. The actual test will set up vid/sid via helpers before calling CreateChargingId. The test will compile if you inline the correct helper sequence as in Task 16 Step 1.)
 
 - [ ] **Step 2: Add NOT_FOUND case**
 
@@ -1472,11 +1468,9 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
   auto channel = ServiceITBase::channel();
-  const auto cid = data::CreateChargingId(channel, "", "");
-  // Real setup:
-  // const auto vid = data::CreateVehicleId(channel);
-  // const auto sid = data::CreateSourceCategoryId(channel);
-  // const auto cid = data::CreateChargingId(channel, vid, sid);
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  const auto cid = data::CreateChargingId(channel, vid, sid);
   auto stub = ChargingService::NewStub(channel);
   DeleteChargingRequest dreq; dreq.set_id(cid);
   google::protobuf::Empty empty; grpc::ClientContext c1;
@@ -1488,8 +1482,6 @@ TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
             grpc::StatusCode::NOT_FOUND);
 }
 ```
-
-(Implementer: replace the comment-in-comment lines above with the real helper calls per the pattern in Task 16 Step 1.)
 
 - [ ] **Step 2: Add NOT_FOUND case**
 
@@ -1614,11 +1606,90 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 
 ---
 
+### Task 22 (conditional): Coverage gap closure — only run if Task 21 shows < 95%
+
+**Why this is conditional:** R2 reviewer estimated `charging_service.cc` coverage at ~84-88% from the 13 cases above — likely below the 95% threshold. The branches missed:
+
+1. **`ListChargings` filter branches** (5 filters in impl, none exercised): `vehicle_id`, `start_after`, `start_before`, `charger_type`, `source_category_id`.
+2. **Remaining `ValidateCharging` branches**: `cost <= 0`, `end_percent <= start_percent` (only `kwh_charged <= 0` covered).
+3. **`RowToCharging` non-NULL branches**: `ServiceFee`, `Location`, `Remark` (all set to empty by default helper).
+
+If `lcov --summary charging.info` reports < 95%, add the cases below:
+
+- [ ] **Step 1: Add 3 filtered `ListChargings` cases**
+
+```cpp
+TEST_F(ChargingServiceIT, ListChargings_FilterByVehicleId) {
+  auto channel = ServiceITBase::channel();
+  const auto vid = data::CreateVehicleId(channel);
+  const auto sid = data::CreateSourceCategoryId(channel);
+  // Create 3 chargings on this vehicle + 1 on a different vehicle
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(channel)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  const auto other_vid = data::CreateVehicleId(channel);
+  Charging other; grpc::ClientContext co;
+  ASSERT_TRUE(ChargingService::NewStub(channel)->CreateCharging(
+      &co, data::MakeValidCreateChargingRequest(other_vid, sid), &other).ok());
+  // Filter by vehicle_id
+  auto stub = ChargingService::NewStub(channel);
+  ListChargingsRequest req; req.set_vehicle_id(vid);
+  ListChargingsResponse resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.chargings_size(), 3);
+}
+
+TEST_F(ChargingServiceIT, ListChargings_FilterByChargerType) {
+  // ... 2 chargings with CHARGER_TYPE_FAST + 1 with CHARGER_TYPE_SLOW, filter by FAST → 2
+}
+
+TEST_F(ChargingServiceIT, ListChargings_FilterByDateRange) {
+  // ... 3 chargings with varying start_time, filter by start_after=mid → fewer
+}
+```
+
+- [ ] **Step 2: Add 2 missing `ValidateCharging` cases to Task 16**
+
+```cpp
+TEST_F(ChargingServiceIT, CreateCharging_NonPositiveCost_InvalidArgument) {
+  // ... make valid request, set cost = 0.0, expect INVALID_ARGUMENT
+}
+
+TEST_F(ChargingServiceIT, CreateCharging_EndPercentLteStart_InvalidArgument) {
+  // ... make valid request, set end_percent = start_percent, expect INVALID_ARGUMENT
+}
+```
+
+- [ ] **Step 3: Add a `MakeValidCreateChargingRequest` variant with non-nullable fields set**
+
+Extend the helper (or add `MakeValidCreateChargingRequestFull`) that also calls `set_service_fee(2.5)`, `set_location("Home charger")`, `set_remark("overnight")`. Then add one test case that uses it + asserts the response has those fields round-tripped.
+
+- [ ] **Step 4: Re-run coverage, expect ≥ 95%**
+
+```bash
+cd cmake-build-cov && \
+  lcov --capture --directory . --output-file charging.info \
+       --include '*/src/services/charging_service.cc' \
+       --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
+lcov --summary charging.info 2>&1 | grep -E 'lines|====='
+```
+
+- [ ] **Step 5: Commit coverage closure**
+
+```bash
+git add tests/integration/charging_service_test.cc tests/integration/test_data.h tests/integration/test_data.cc
+git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charging): coverage gap closure — filtered list + missing validation + nullable field round-trip"
+```
+
+---
+
 ### End of Chunk 3
 
 After Chunk 3 lands:
 - `evgrpc_integration_tests` has 13 ChargingService cases (Create 3 + Get 2 + Update 3 + Delete 2 + List 3), all green.
-- `charging_service.cc` coverage ≥ 95%.
+- `charging_service.cc` coverage ≥ 95% (possibly requiring Task 22 to run; expected ~92% before, ~96% after).
 - `data::CreateVehicleId` / `CreateSourceCategoryId` / `CreateChargingId` / `ToUpdateChargingRequest` helpers available for Chunks 4+.
 
 If any Task fails verification, **STOP** and surface to the user before continuing.
