@@ -2338,7 +2338,10 @@ void SeedVehicleDataForDisplay(
     int n_consumptions) {
   const auto wid = CreateWeatherId(pg);
   const auto sid = CreateSourceCategoryId(channel);
-  // Insert n_chargings + n_consumptions via gRPC (test-only setup, fast)
+  // Insert n_chargings + n_consumptions via the gRPC helpers. `wid` is
+  // captured to silence -Wunused-variable; CreateConsumptionId auto-
+  // creates its own weather row, so the value isn't used here.
+  (void)wid;
   for (int i = 0; i < n_chargings; ++i) {
     const auto cid = CreateChargingId(channel, vehicle_id, sid);
     EXPECT_FALSE(cid.empty());
@@ -2876,12 +2879,34 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "plan(chunk
 2. **Validator branches** (if `start > end` in some RPCs).
 3. **`PeriodReport` total_km / total_kwh aggregation branches** (might have COALESCE / NULL handling).
 
-If coverage < 95%, add:
+If coverage < 95%, add (concrete, ordered by likely impact):
 
-- [ ] **Step 1: Add 2-3 time-range filter cases** (e.g. narrow window excludes all data → empty)
-- [ ] **Step 2: Add 1 INVALID_ARGUMENT case** if a validator exists
+- [ ] **Step 1: Add `start_time`/`end_time` filter cases** for each list-style RPC (5 cases total) — narrow window excludes seeded data → returns empty
+  ```cpp
+  TEST_F(DisplayServiceIT, GetCostByChargerType_TimeRangeFilter_Empty) {
+    // ... seed data, then request with start=2025-01-01 end=2025-01-31 (no data in range)
+  }
+  // Repeat for GetCostBySourceCategory, GetConsumptionEfficiency, GetRangeAccuracy, GetTemperatureConsumptionCorrelation
+  ```
+- [ ] **Step 2: Add INVALID_ARGUMENT case** for any RPC with a validator (read `display_service.cc` to identify which RPCs validate `start > end`)
+  ```cpp
+  TEST_F(DisplayServiceIT, GetVehicleCostSummary_StartAfterEnd_InvalidArgument) {
+    // ... start > end → INVALID_ARGUMENT (if validator exists)
+  }
+  ```
 - [ ] **Step 3: Re-run lcov; expect ≥ 95%**
+  ```bash
+  cd cmake-build-cov && \
+    lcov --capture --directory . --output-file display.info \
+         --include '*/src/services/display_service.cc' \
+         --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*'
+  lcov --summary display.info 2>&1 | grep -E 'lines|====='
+  ```
 - [ ] **Step 4: Commit coverage closure**
+  ```bash
+  git add tests/integration/display_service_test.cc
+  git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(display): coverage gap closure — time-range filter + validator"
+  ```
 
 ---
 
