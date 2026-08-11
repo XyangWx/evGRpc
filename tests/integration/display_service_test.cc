@@ -232,6 +232,64 @@ TEST_F(DisplayServiceIT, GetCostByChargerType_Filtered) {
   EXPECT_LT(total_filt, total_unf);
 }
 
+// Task 36: GetCostBySourceCategory happy path. Seeds charging rows
+// (each links to a source_category FK) and asserts at least one
+// breakdown row.
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_HappyPath) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  EXPECT_GT(resp.breakdowns_size(), 0);
+}
+
+// Task 36: GetCostBySourceCategory empty case.
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+
+// Task 36: GetCostBySourceCategory filtered case.
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_Filtered) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req_unf;
+  *req_unf.mutable_start_time() = data::DefaultTimeRange().start;
+  *req_unf.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp_unf;
+  grpc::ClientContext ctx_unf;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx_unf, req_unf, &resp_unf).ok());
+  double total_unf = 0;
+  for (const auto& b : resp_unf.breakdowns()) total_unf += b.total_cost();
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid_a);
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostBySourceCategoryResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  double total_filt = 0;
+  for (const auto& b : resp.breakdowns()) total_filt += b.total_cost();
+  EXPECT_LT(total_filt, total_unf);
+}
+
 // The closing namespace brace lives at the END of the file.
 // Tasks 32-39 will insert new TEST_Fs BEFORE this closing brace.
 // Use edit-tool with oldText including the closing brace as anchor
