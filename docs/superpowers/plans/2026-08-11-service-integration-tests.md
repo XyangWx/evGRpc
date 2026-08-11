@@ -243,7 +243,7 @@ cd cmake-build-debug && EVGRPC_TEST_DATABASE_URL='postgresql://vegrpc_admin:***@
 ```
 Expected: both `evgrpc_e2e_tests` (existing smoke + new `E2ESmokeNoAuth.*`) PASS — delegator keeps old behavior intact, new test exercises bypass path.
 
-- [ ] **Step 6: Run + commit**
+- [ ] **Step 7: Run + commit**
 
 Run: `cmake-build-debug/tests/evgrpc_e2e_tests --gtest_filter=E2ESmokeNoAuth.*`
 Expected: PASS.
@@ -530,7 +530,7 @@ Vehicle MakeValidVehicle(std::string plate) {
 }  // namespace evgrpc::test::data
 ```
 
-- [ ] **Step 3: Add to CMakeLists**
+- [ ] **Step 3: Add to CMakeLists (modify the `add_executable` / `target_link_libraries` block from Task 4 Step 4)**
 
 Add `test_data.cc` to `evgrpc_integration_tests` sources; link `evgrpc_proto` + `evgrpc_util`.
 
@@ -565,13 +565,6 @@ Expected: PASS.
 ```bash
 git add tests/integration/test_data.h tests/integration/test_data.cc tests/integration/CMakeLists.txt
 git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): TestData helpers (Vehicle starter) + runtime smoke"
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/integration/test_data.h tests/integration/test_data.cc tests/integration/CMakeLists.txt
-git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test): TestData helpers (Vehicle starter)"
 ```
 
 ---
