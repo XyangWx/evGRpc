@@ -1,6 +1,6 @@
 {
   "database": {
-    "url": "postgresql://evgrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc"
+    "url": "postgresql://vegrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc"
   },
   "oauth": {
     "issuer_url": "https://test-idp",

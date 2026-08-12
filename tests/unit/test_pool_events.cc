@@ -6,6 +6,7 @@
 #include <string>
 #include "config/config_loader.h"
 #include "db/pool.h"
+#include "fixtures/pg_container.h"
 #include "log/log.h"
 #include <spdlog/spdlog.h>
 
@@ -18,8 +19,16 @@ std::string ReadAll(const std::string& path) {
 }
 
 std::string TestDatabaseUrl() {
-  const char* url = std::getenv("EVGRPC_TEST_DATABASE_URL");
-  return url ? url : "";
+  // Prefer explicit env var (CI / per-test override).
+  if (const char* env = std::getenv("EVGRPC_TEST_DATABASE_URL"); env && *env) {
+    return env;
+  }
+  // Fallback to repo-root ./config.json so local dev can run these
+  // unit tests without setting any env vars.
+  if (auto url = evgrpc::test::ReadDatabaseUrlFromConfig("./config.json")) {
+    return *url;
+  }
+  return "";
 }
 
 }  // namespace
@@ -27,7 +36,7 @@ std::string TestDatabaseUrl() {
 TEST(PoolEventsTest, AcquireAndReleaseEmitDebugLines) {
   auto url = TestDatabaseUrl();
   if (url.empty()) {
-    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set";
+    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
 
   const std::string log_path = "/tmp/evgrpc_test_pool_events.log";

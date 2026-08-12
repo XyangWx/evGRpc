@@ -181,8 +181,12 @@ override with `--config <path>` or `-c <path>`.
 }
 ```
 
-A working example lives at [`config.example.json`](config.example.json)
-at the repo root. Full validation rules and error messages are in
+Two config files live at the repo root:
+
+* [`config.example.json`](config.example.json) — production-template reference (safe to commit; no secrets).
+* [`config.json`](config.json) — local test environment values matching the test infrastructure (test DB + test OIDC issuer/audience matching `tests/fixtures/test_server.cc`). Running `./build/src/evgrpc_server` from the repo root picks this up automatically (default path). **Do not use this config in production** — it points at the test database and a non-existent OIDC issuer.
+
+Full validation rules and error messages are in
 [`docs/superpowers/specs/2026-08-06-config-json-migration.md`](docs/superpowers/specs/2026-08-06-config-json-migration.md) §2.
 
 ### OIDC Discovery

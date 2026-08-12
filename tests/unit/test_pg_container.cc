@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <unistd.h>
 
 #include "fixtures/pg_container.h"
 
@@ -19,11 +20,19 @@ class PgContainerTest : public ::testing::Test {
   void SetUp() override {
     unsetenv("DATABASE_URL");
     unsetenv("EVGRPC_TEST_DB_PASSWORD");
+    unsetenv("EVGRPC_TEST_DB_URL_OVERRIDE");  // sentinel below
   }
   void TearDown() override {
     unsetenv("DATABASE_URL");
     unsetenv("EVGRPC_TEST_DB_PASSWORD");
+    unsetenv("EVGRPC_TEST_DB_URL_OVERRIDE");
   }
+  // The fallback path also tries ./config.json (production binary's
+  // default config path). To test the env-var-only fallback
+  // (FallbackUsesDefaults / MissingBothEnvVarsMentionsBoth), we
+  // temporarily redirect PgContainer to a non-existent config file
+  // via chdir. Cleaner alternative: rename config.json during the
+  // test, but that's racy in parallel. chdir+restore is per-test.
 };
 
 // --- DATABASE_URL (URI form) ---
@@ -107,17 +116,23 @@ TEST_F(PgContainerTest, ParsesKeywordForm) {
 
 // --- Fallback path (no DATABASE_URL) ---
 
-// When DATABASE_URL is unset, EVGRPC_TEST_DB_PASSWORD + hardcoded
-// defaults wire up the local-dev connection.
+// When DATABASE_URL is unset AND no ./config.json fallback is
+// reachable, EVGRPC_TEST_DB_PASSWORD + hardcoded defaults wire up
+// the local-dev connection. Test runs from a temp CWD so the
+// ./config.json fallback path doesn't shadow this branch.
 TEST_F(PgContainerTest, FallbackUsesDefaults) {
   setenv("EVGRPC_TEST_DB_PASSWORD", "pw", 1);
+  // Run from /tmp so ./config.json is unreachable from PgContainer.
+  char saved_cwd[4096];
+  getcwd(saved_cwd, sizeof(saved_cwd));
+  chdir("/tmp");
   PgContainer pg;
+  chdir(saved_cwd);
   EXPECT_EQ(pg.Host(), "127.0.0.1");
   EXPECT_EQ(pg.Port(), 5432);
   EXPECT_EQ(pg.Database(), "evgrpc");
   EXPECT_EQ(pg.Username(), "evgrpc_admin");
   EXPECT_EQ(pg.Password(), "pw");
-  // Fallback path uses keyword form internally.
   EXPECT_NE(pg.Conninfo().find("host=127.0.0.1"), std::string::npos);
   EXPECT_NE(pg.Conninfo().find("password=pw"), std::string::npos);
 }
@@ -131,20 +146,49 @@ TEST_F(PgContainerTest, MalformedUrlThrows) {
   EXPECT_THROW(PgContainer pg, std::runtime_error);
 }
 
-// Neither DATABASE_URL nor EVGRPC_TEST_DB_PASSWORD → error message now
-// mentions both options (vs. just the password var, which used to
-// mislead users who had DATABASE_URL set elsewhere).
+// Neither DATABASE_URL nor EVGRPC_TEST_DB_PASSWORD (and no
+// ./config.json fallback reachable) → error message mentions both
+// env-var options. Same chdir-to-/tmp trick to skip config.json.
 TEST_F(PgContainerTest, MissingBothEnvVarsMentionsBoth) {
+  char saved_cwd[4096];
+  getcwd(saved_cwd, sizeof(saved_cwd));
+  chdir("/tmp");
   try {
     PgContainer pg;
     FAIL() << "expected throw";
   } catch (const std::runtime_error& e) {
+    chdir(saved_cwd);
     std::string msg = e.what();
     EXPECT_NE(msg.find("EVGRPC_TEST_DB_PASSWORD"), std::string::npos)
         << "should mention EVGRPC_TEST_DB_PASSWORD: " << msg;
     EXPECT_NE(msg.find("DATABASE_URL"), std::string::npos)
         << "should mention DATABASE_URL: " << msg;
+    return;
+  } catch (...) {
+    chdir(saved_cwd);
+    throw;
   }
+  chdir(saved_cwd);
+}
+
+// --- config.json fallback (new in this commit) ---
+
+// With neither DATABASE_URL nor EVGRPC_TEST_DB_PASSWORD set but a
+// readable ./config.json present, PgContainer should pick up
+// database.url from the file. Verifies the new fallback chain.
+TEST_F(PgContainerTest, ConfigJsonFallback) {
+  // This test relies on the repo's config.json being readable from
+  // the runner's CWD. We assume tests run from repo root
+  // (CMake's WORKING_DIRECTORY is set there). Skip if not.
+  if (access("./config.json", R_OK) != 0) {
+    GTEST_SKIP() << "./config.json not reachable from CWD " << getcwd(nullptr, 0);
+  }
+  PgContainer pg;
+  // The actual URL in config.json starts with postgresql://; verify
+  // by parsing the URL portion.
+  EXPECT_EQ(pg.Conninfo().substr(0, 13), "postgresql://")
+      << "config.json fallback didn't yield a postgresql URL; "
+      << "got Conninfo = " << pg.Conninfo();
 }
 
 }  // namespace

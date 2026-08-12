@@ -7,14 +7,22 @@
 #include "config/config_loader.h"
 #include "db/exec.h"
 #include "db/pool.h"
+#include "fixtures/pg_container.h"
 #include "log/log.h"
 #include <spdlog/spdlog.h>
 
 namespace {
 
 std::string TestDatabaseUrl() {
-  const char* url = std::getenv("EVGRPC_TEST_DATABASE_URL");
-  return url ? url : "";
+  // Prefer explicit env var (CI / per-test override).
+  if (const char* url = std::getenv("EVGRPC_TEST_DATABASE_URL"); url && *url) {
+    return url;
+  }
+  // Fallback to repo-root ./config.json — same precedence as PgContainer.
+  if (auto url = evgrpc::test::ReadDatabaseUrlFromConfig("./config.json")) {
+    return *url;
+  }
+  return "";
 }
 
 std::string ReadAll(const std::string& path) {
@@ -28,7 +36,7 @@ std::string ReadAll(const std::string& path) {
 TEST(DbExecTest, SuccessEmitsDebugLines) {
   auto url = TestDatabaseUrl();
   if (url.empty()) {
-    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set";
+    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
   const std::string log_path = "/tmp/evgrpc_test_db_exec_success.log";
   std::remove(log_path.c_str());
@@ -56,7 +64,7 @@ TEST(DbExecTest, SuccessEmitsDebugLines) {
 TEST(DbExecTest, NoArgsPath) {
   auto url = TestDatabaseUrl();
   if (url.empty()) {
-    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set";
+    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
   evgrpc::PgPool pool(url, /*size=*/1);
   auto c = pool.acquire();
@@ -69,7 +77,7 @@ TEST(DbExecTest, NoArgsPath) {
 TEST(DbExecTest, FailureEmitsWarn) {
   auto url = TestDatabaseUrl();
   if (url.empty()) {
-    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set";
+    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
   const std::string log_path = "/tmp/evgrpc_test_db_exec_fail.log";
   std::remove(log_path.c_str());
@@ -102,7 +110,7 @@ TEST(DbExecTest, FailureEmitsWarn) {
 TEST(DbExecTest, SilentAtInfoLevel) {
   auto url = TestDatabaseUrl();
   if (url.empty()) {
-    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set";
+    GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
   const std::string log_path = "/tmp/evgrpc_test_db_exec_silent.log";
   std::remove(log_path.c_str());

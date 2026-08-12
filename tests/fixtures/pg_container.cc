@@ -3,11 +3,13 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace evgrpc::test {
-namespace {
 
 // Default connection when DATABASE_URL is unset. Matches the
 // environment the user runs locally for evGRpc development
@@ -19,6 +21,13 @@ constexpr const char* kDefaultDatabase = "evgrpc";
 constexpr const char* kDefaultUsername = "evgrpc_admin";
 constexpr const char* kDefaultPasswordEnv = "EVGRPC_TEST_DB_PASSWORD";
 constexpr const char* kDatabaseUrlEnv = "DATABASE_URL";
+// Fallback config path. When neither DATABASE_URL nor
+// EVGRPC_TEST_DB_PASSWORD is set, PgContainer tries to read
+// database.url from this JSON file (the same file evgrpc_server
+// reads at startup). Lets `./build/src/evgrpc_server` and the
+// integration tests share one config in the repo root — no env
+// vars needed for local dev.
+constexpr const char* kFallbackConfigPath = "./config.json";
 
 std::string GetEnvOrThrow(const char* name) {
   const char* v = std::getenv(name);
@@ -78,6 +87,32 @@ bool IsUrlForm(const std::string& s) {
   return s.size() >= 13 && s.substr(0, 13) == "postgresql://" ||
          s.size() >= 11 && s.substr(0, 11) == "postgres://";
 }
+
+// Read database.url from a config.json file. Returns the URL string
+// if found and non-empty, std::nullopt otherwise. Extracted from the
+// Impl constructor so unit tests can exercise the fallback path
+// without spinning up a real PgContainer / DB connection.
+//
+// `path` is read verbatim; callers are responsible for picking the
+// right path (the production code uses ./config.json relative to CWD).
+std::optional<std::string> ReadDatabaseUrlFromConfig(const std::string& path) {
+  std::ifstream f(path);
+  if (!f.good()) return std::nullopt;
+  try {
+    nlohmann::json j;
+    f >> j;
+    if (!j.contains("database") || !j["database"].is_object()) return std::nullopt;
+    const auto& db = j["database"];
+    if (!db.contains("url") || !db["url"].is_string()) return std::nullopt;
+    const std::string url = db["url"].get<std::string>();
+    if (url.empty()) return std::nullopt;
+    return url;
+  } catch (const std::exception&) {
+    return std::nullopt;  // malformed JSON, missing keys, etc.
+  }
+}
+
+namespace {
 
 // Parses postgresql://[user[:password]@][host][:port][/dbname][?params]
 // — the form every user-facing tool (psql \conninfo, scripts/smoke.sh,
@@ -214,6 +249,17 @@ class PgContainer::Impl {
       // Accept both URI form (postgresql://u:p@h:1/db) and keyword
       // form (host=... dbname=... user=...). ParseConninfo dispatches.
       conninfo_ = db_url;
+      auto p = ParseConninfo(conninfo_);
+      host_ = p.host;
+      port_ = static_cast<uint16_t>(std::stoi(p.port.empty() ? "5432" : p.port));
+      database_ = p.dbname;
+      username_ = p.user;
+      password_ = p.password;
+    } else if (auto url = ReadDatabaseUrlFromConfig(kFallbackConfigPath); url.has_value()) {
+      // No DATABASE_URL — try the repo-root config.json that
+      // evgrpc_server also reads. Lets integration tests run without
+      // any env vars when ./config.json points at a working DB.
+      conninfo_ = *url;
       auto p = ParseConninfo(conninfo_);
       host_ = p.host;
       port_ = static_cast<uint16_t>(std::stoi(p.port.empty() ? "5432" : p.port));

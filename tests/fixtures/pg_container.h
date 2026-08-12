@@ -2,9 +2,18 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace evgrpc::test {
+
+// Read the database.url from a config.json file. Returns the URL
+// string if found and non-empty, std::nullopt otherwise (missing
+// file, malformed JSON, missing keys, empty value). Exposed for unit
+// tests so the PgContainer config.json fallback path can be verified
+// without spinning up a real DB connection.
+std::optional<std::string> ReadDatabaseUrlFromConfig(
+    const std::string& path);
 
 // RAII wrapper around a PostgreSQL connection used by integration tests.
 //

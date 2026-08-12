@@ -18,6 +18,7 @@ add_executable(evgrpc_tests
   unit/uuid_test.cc
   unit/rpc_scope_test.cc
   unit/test_pg_container.cc
+  unit/test_pg_container_config.cc
 )
 target_link_libraries(evgrpc_tests PRIVATE
   gtest
