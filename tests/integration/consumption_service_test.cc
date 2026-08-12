@@ -230,6 +230,35 @@ TEST_F(ConsumptionServiceIT, DeleteConsumption_HappyPath) {
             grpc::StatusCode::NOT_FOUND);
 }
 
+// Gap closure: round-trip read after create exercises the
+// ParseTimestamp success path in RowToConsumption (lines 40, 46 of
+// consumption_service.cc) plus the remark set path (line 64).
+TEST_F(ConsumptionServiceIT, CreateConsumption_WithRemark_RoundTrip) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  req.set_remark("trip notes");
+  Consumption resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->CreateConsumption(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.remark(), "trip notes");
+}
+
+// Gap closure: end <= start exercises the end>start validator at
+// consumption_service.cc line 75-78.
+TEST_F(ConsumptionServiceIT, CreateConsumption_EndLeStart_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  *req.mutable_end() = req.start();  // end == start -> INVALID_ARGUMENT
+  Consumption resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateConsumption(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 // Task 27: DeleteConsumption with an all-zero UUID — exercises the
 // NOT_FOUND branch (no row exists, server returns 0 rows from DELETE).
 TEST_F(ConsumptionServiceIT, DeleteConsumption_NotFound) {

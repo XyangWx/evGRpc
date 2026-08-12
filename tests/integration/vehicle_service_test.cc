@@ -224,6 +224,24 @@ TEST_F(VehicleServiceIT, UpdateVehicle_EmptyLicensePlate_Accepted) {
   EXPECT_EQ(resp.license_plate(), "");
 }
 
+// Gap closure: deleting a vehicle that has dependent charging rows
+// triggers FK constraint violation -> pqxx::foreign_key_violation ->
+// ToGrpcStatus -> INTERNAL via catch block (line 176-180 of
+// vehicle_service.cc).
+TEST_F(VehicleServiceIT, DeleteVehicle_WithDependentRows_Internal) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  data::CreateChargingId(channel(), vid, sid);
+  auto stub = VehicleService::NewStub(channel());
+  DeleteVehicleRequest dreq;
+  dreq.set_id(vid);
+  google::protobuf::Empty empty;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->DeleteVehicle(&ctx, dreq, &empty);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT)
+      << "msg=" << st.error_message();
+}
+
 // DeleteVehicle happy-path: create → delete → verify the row is actually
 // gone (post-condition check via GetVehicle). Mirrors the Task 10/11
 // pattern of using a real DB write in setup so we exercise the
