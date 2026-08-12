@@ -83,38 +83,44 @@ lcov --capture --directory "$BUILD_DIR" \
      --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*' \
      --ignore-errors mismatch,gcov,negative
 
-echo ">>> Services coverage summary:"
-lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
-  /^src\/services\/[^ ]*\.cc/ {
-    for (i = 1; i <= NF; i++) {
-      if ($i ~ /^[0-9]+\.[0-9]+%$/) {
-        gsub(/%/, "", $i)
-        sum += $i
-        n++
-        break
-      }
-    }
-  }
-  END {
-    if (n > 0) printf "lines average across %d services files: %.1f%%\n", n, sum/n
-    else print "ERROR: no src/services/*.cc files in coverage.info" > "/dev/stderr"
-  }
-'
+# Parse coverage.info directly to compute average line coverage across
+# src/services/*.cc. lcov 2.0 removed per-file rows from --summary
+# output (only shows overall totals now), and --list truncates paths
+# making string matching unreliable. coverage.info has per-file LF:
+# (lines found) and LH: (lines hit) records that we can sum ourselves.
+#
+# Format reminder:
+#   SF:<path>     -- start of record for <path>
+#   LF:<count>    -- lines found
+#   LH:<count>    -- lines hit
+#   end_of_record -- end of record
 
-# Average services coverage as float, e.g. "95.4"
-COVERAGE_PCT=$(lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
-  /^src\/services\/[^ ]*\.cc/ {
-    for (i = 1; i <= NF; i++) {
-      if ($i ~ /^[0-9]+\.[0-9]+%$/) {
-        gsub(/%/, "", $i)
-        sum += $i
-        n++
-        break
-      }
+echo ">>> Services coverage summary:"
+SERVICES_COV=$(awk '
+  /^SF:/ && /\/src\/services\/.*\.cc$/ { in_services=1; next }
+  /^end_of_record/ { in_services=0 }
+  in_services && /^LF:/ { lf += $2 }
+  in_services && /^LH:/ { lh += $2 }
+  END {
+    if (lf > 0) {
+      pct = (lh / lf) * 100
+      printf "%d files, %d/%d lines (%.1f%%)\n", n_files, lh, lf, pct
+    } else {
+      print "ERROR: no src/services/*.cc files in coverage.info" > "/dev/stderr"
+      exit 1
     }
   }
-  END { if (n > 0) printf "%.1f", sum/n; else print "" }
-')
+' "$COVERAGE_INFO")
+
+# Compute the actual percentage separately so COVERAGE_PCT is a clean float.
+COVERAGE_PCT=$(awk '
+  /^SF:/ && /\/src\/services\/.*\.cc$/ { in_services=1; next }
+  /^end_of_record/ { in_services=0 }
+  in_services && /^LF:/ { lf += $2 }
+  in_services && /^LH:/ { lh += $2 }
+  END { if (lf > 0) printf "%.1f", (lh / lf) * 100; else print "" }
+' "$COVERAGE_INFO")
+echo "$SERVICES_COV"
 
 # Robust parse: empty COVERAGE_PCT -> clear diagnostic, not cryptic arithmetic error.
 if [[ -z "${COVERAGE_PCT}" ]]; then
