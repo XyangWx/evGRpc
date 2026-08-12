@@ -1,0 +1,19 @@
+{
+  "database": {
+    "url": "postgresql://evgrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc"
+  },
+  "oauth": {
+    "issuer_url": "https://test-idp",
+    "audience": "evgrpc",
+    "jwks_cache_ttl_seconds": 3600
+  },
+  "grpc": {
+    "port": 50051
+  },
+  "log": {
+    "level": "info",
+    "file": "",
+    "max_size_mb": 100,
+    "max_files": 7
+  }
+}
