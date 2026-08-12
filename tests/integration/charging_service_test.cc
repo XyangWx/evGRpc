@@ -225,6 +225,25 @@ TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Round-trip read after create exercises the ParseTimestamp success
+// path in RowToCharging (charging_service.cc lines 36-43). The fix
+// to ParseTimestamp (commit ec0e92d + this run's production fix)
+// handles PG's "2023-11-14 22:13:20.000000+00" format which
+// TimeUtil::FromString can't parse directly.
+TEST_F(ChargingServiceIT, CreateCharging_GetCharging_RoundTrip_Timestamps) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  const auto cid = data::CreateChargingId(channel(), vid, sid);
+  auto stub = ChargingService::NewStub(channel());
+  GetChargingRequest greq;
+  greq.set_id(cid);
+  Charging got;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCharging(&ctx, greq, &got).ok());
+  EXPECT_EQ(got.start_time().seconds(), 1700000000);
+  EXPECT_EQ(got.end_time().seconds(), 1700003600);
+}
+
 // Gap closure: setting service_fee exercises the nullable wrapper
 // append path (line 123) and the read-back parse (line 54).
 TEST_F(ChargingServiceIT, CreateCharging_WithServiceFee_RoundTrip) {

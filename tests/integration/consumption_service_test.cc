@@ -232,6 +232,24 @@ TEST_F(ConsumptionServiceIT, DeleteConsumption_HappyPath) {
 
 // Gap closure: round-trip read after create exercises the
 // ParseTimestamp success path in RowToConsumption (lines 40, 46 of
+// consumption_service.cc). Same fix as charging_service.cc ParseTimestamp
+// (this run's production fix) — handles PG TIMESTAMP format with
+// microseconds + tz offset.
+TEST_F(ConsumptionServiceIT, CreateConsumption_GetConsumption_RoundTrip_Timestamps) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto cid = data::CreateConsumptionId(channel(), pg(), vid);
+  auto stub = ConsumptionService::NewStub(channel());
+  GetConsumptionRequest greq;
+  greq.set_id(cid);
+  Consumption got;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumption(&ctx, greq, &got).ok());
+  EXPECT_EQ(got.start().seconds(), 1700000000);
+  EXPECT_EQ(got.end().seconds(), 1700003600);
+}
+
+// Gap closure: round-trip read after create exercises the
+// ParseTimestamp success path in RowToConsumption (lines 40, 46 of
 // consumption_service.cc) plus the remark set path (line 64).
 TEST_F(ConsumptionServiceIT, CreateConsumption_WithRemark_RoundTrip) {
   const auto vid = data::CreateVehicleId(channel());
