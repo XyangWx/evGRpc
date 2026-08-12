@@ -35,7 +35,7 @@ TEST(LogInitTest, IdempotentWhenUnchanged) {
 TEST(LogInitTest, RespectsLogLevelDebug) {
   auto cfg = DefaultLogConfig();
   cfg.level = "debug";
-  const std::string path = "/tmp/evgrpc_test_log_level_debug.log";
+  const std::string path = "./log/test_log_level_debug.log";
   cfg.file = path;
   std::remove(path.c_str());
   evgrpc::log::Init(cfg);
@@ -54,7 +54,7 @@ TEST(LogInitTest, RespectsLogLevelDebug) {
 TEST(LogInitTest, StderrSinkOnlyReceivesErrorOrAbove) {
   auto cfg = DefaultLogConfig();
   cfg.level = "trace";
-  const std::string path = "/tmp/evgrpc_test_log_stderr_filter.log";
+  const std::string path = "./log/test_log_stderr_filter.log";
   cfg.file = path;
   std::remove(path.c_str());
   evgrpc::log::Init(cfg);

@@ -68,6 +68,10 @@ coverage.out
 htmlcov/
 Testing/
 
+# Runtime + test logs (production server writes ./log/evgrpc.log;
+# unit tests write ./log/test_*.log; both go to ./log/)
+log/*
+
 # Valgrind
 vgcore.*
 

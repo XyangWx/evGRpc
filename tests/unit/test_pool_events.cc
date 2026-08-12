@@ -39,7 +39,7 @@ TEST(PoolEventsTest, AcquireAndReleaseEmitDebugLines) {
     GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
 
-  const std::string log_path = "/tmp/evgrpc_test_pool_events.log";
+  const std::string log_path = "./log/test_pool_events.log";
   std::remove(log_path.c_str());
 
   evgrpc::LogConfig lc;

@@ -38,7 +38,7 @@ TEST(DbExecTest, SuccessEmitsDebugLines) {
   if (url.empty()) {
     GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
-  const std::string log_path = "/tmp/evgrpc_test_db_exec_success.log";
+  const std::string log_path = "./log/test_db_exec_success.log";
   std::remove(log_path.c_str());
 
   evgrpc::LogConfig lc;
@@ -79,7 +79,7 @@ TEST(DbExecTest, FailureEmitsWarn) {
   if (url.empty()) {
     GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
-  const std::string log_path = "/tmp/evgrpc_test_db_exec_fail.log";
+  const std::string log_path = "./log/test_db_exec_fail.log";
   std::remove(log_path.c_str());
 
   evgrpc::LogConfig lc;
@@ -112,7 +112,7 @@ TEST(DbExecTest, SilentAtInfoLevel) {
   if (url.empty()) {
     GTEST_SKIP() << "EVGRPC_TEST_DATABASE_URL not set (and no ./config.json fallback)";
   }
-  const std::string log_path = "/tmp/evgrpc_test_db_exec_silent.log";
+  const std::string log_path = "./log/test_db_exec_silent.log";
   std::remove(log_path.c_str());
 
   evgrpc::LogConfig lc;
