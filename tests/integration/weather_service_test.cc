@@ -100,4 +100,23 @@ TEST_F(WeatherServiceIT, SearchWeather_LimitCapped) {
   EXPECT_LE(resp.matches_size(), 2);
 }
 
+// Gap closure: duplicate weather.Name triggers pqxx::unique_violation
+// -> ToGrpcStatus -> ALREADY_EXISTS via catch block at
+// weather_service.cc:36-39.
+TEST_F(WeatherServiceIT, CreateWeather_DuplicateName_AlreadyExists) {
+  auto stub = WeatherService::NewStub(channel());
+  const std::string name = "DUP-" + data::FreshUuid().substr(0, 8);
+  CreateWeatherRequest req1;
+  req1.set_name(name);
+  Weather r1;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateWeather(&c1, req1, &r1).ok());
+  CreateWeatherRequest req2;
+  req2.set_name(name);
+  Weather r2;
+  grpc::ClientContext c2;
+  grpc::Status st = stub->CreateWeather(&c2, req2, &r2);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::ALREADY_EXISTS);
+}
+
 }  // namespace evgrpc::test

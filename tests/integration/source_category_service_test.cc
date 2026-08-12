@@ -105,4 +105,28 @@ TEST_F(SourceCategoryServiceIT, SearchSourceCategory_LimitCapped) {
   EXPECT_LE(resp.matches_size(), 2);
 }
 
+// Gap closure (Tasks 22/45-style coverage bump): duplicate name
+// triggers the source_category.Name UNIQUE constraint, which
+// produces a pqxx::unique_violation exception. The catch block
+// at the bottom of CreateSourceCategory (source_category_service.cc:39-42)
+// fires ToGrpcStatus(unique_violation) -> ALREADY_EXISTS. Adds
+// 4 lines of coverage per service.
+TEST_F(SourceCategoryServiceIT, CreateSourceCategory_DuplicateName_AlreadyExists) {
+  auto stub = SourceCategoryService::NewStub(channel());
+  const std::string name = "DUP-" + data::FreshUuid().substr(0, 8);
+  // First insert: succeeds.
+  CreateSourceCategoryRequest req1;
+  req1.set_name(name);
+  SourceCategory r1;
+  grpc::ClientContext c1;
+  ASSERT_TRUE(stub->CreateSourceCategory(&c1, req1, &r1).ok());
+  // Second insert: same name -> ALREADY_EXISTS via catch block.
+  CreateSourceCategoryRequest req2;
+  req2.set_name(name);
+  SourceCategory r2;
+  grpc::ClientContext c2;
+  grpc::Status st = stub->CreateSourceCategory(&c2, req2, &r2);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::ALREADY_EXISTS);
+}
+
 }  // namespace evgrpc::test
