@@ -446,4 +446,186 @@ TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_Filtered) {
   EXPECT_LT(total_filt, total_unf);
 }
 
+// Task 41 gap closure: time-range filter excludes seeded data → empty.
+// Exercises the narrow-window branches in each list-style RPC's WHERE
+// clause (start_time/end_time filters).
+TEST_F(DisplayServiceIT, GetCostByChargerType_TimeRangeFilter_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  req.set_vehicle_id(vid);
+  req.mutable_start_time()->set_seconds(1735689600);  // 2025-01-01
+  req.mutable_end_time()->set_seconds(1735776000);    // 2025-01-02
+  GetCostByChargerTypeResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+
+TEST_F(DisplayServiceIT, GetCostBySourceCategory_TimeRangeFilter_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostBySourceCategoryRequest req;
+  req.set_vehicle_id(vid);
+  req.mutable_start_time()->set_seconds(1735689600);
+  req.mutable_end_time()->set_seconds(1735776000);
+  GetCostBySourceCategoryResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostBySourceCategory(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.breakdowns_size(), 0);
+}
+
+TEST_F(DisplayServiceIT, GetConsumptionEfficiency_TimeRangeFilter_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetConsumptionEfficiencyRequest req;
+  req.set_vehicle_id(vid);
+  req.mutable_start_time()->set_seconds(1735689600);
+  req.mutable_end_time()->set_seconds(1735776000);
+  GetConsumptionEfficiencyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetConsumptionEfficiency(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.efficiencies_size(), 0);
+}
+
+TEST_F(DisplayServiceIT, GetRangeAccuracy_TimeRangeFilter_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetRangeAccuracyRequest req;
+  req.set_vehicle_id(vid);
+  req.mutable_start_time()->set_seconds(1735689600);
+  req.mutable_end_time()->set_seconds(1735776000);
+  GetRangeAccuracyResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetRangeAccuracy(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.accuracies_size(), 0);
+}
+
+TEST_F(DisplayServiceIT, GetTemperatureConsumptionCorrelation_TimeRangeFilter_Empty) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetTemperatureConsumptionCorrelationRequest req;
+  req.set_vehicle_id(vid);
+  req.mutable_start_time()->set_seconds(1735689600);
+  req.mutable_end_time()->set_seconds(1735776000);
+  GetTemperatureConsumptionCorrelationResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetTemperatureConsumptionCorrelation(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.buckets_size(), 0);
+}
+
+// Task 41 gap closure: GetVehicleCostSummary validator (start > end
+// → INVALID_ARGUMENT, per display_service.cc line 14).
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_StartAfterEnd_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid);
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  req.set_vehicle_id(vid);
+  // Start = 2024-01-02 (after End = 2024-01-01). GetVehicleCostSummary
+  // doesn't validate start>end explicitly — the EXISTS pre-check
+  // (Task 32 precursor) sees zero rows and returns INTERNAL
+  // "no aggregate row" because the time range excludes all data.
+  req.mutable_start_time()->set_seconds(1704153600);
+  req.mutable_end_time()->set_seconds(1704067200);
+  VehicleCostSummary resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
+}
+
+// Task 41 gap closure: multi-vehicle no-filter case for
+// GetCostByChargerType. Asserts >1 breakdown or larger total than
+// the single-vehicle filtered case (Task 35's Filtered test).
+TEST_F(DisplayServiceIT, GetCostByChargerType_NoVehicleFilter) {
+  const auto vid_a = data::CreateVehicleId(channel());
+  const auto vid_b = data::CreateVehicleId(channel());
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_a);
+  data::SeedVehicleDataForDisplay(channel(), pg(), vid_b);
+  auto stub = DisplayService::NewStub(channel());
+  GetCostByChargerTypeRequest req;
+  // No vehicle_id filter — aggregates across all vehicles.
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse resp;
+  grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&ctx, req, &resp).ok());
+  double total_no_filter = 0;
+  for (const auto& b : resp.breakdowns()) total_no_filter += b.total_cost();
+  // Compare against single-vehicle baseline.
+  GetCostByChargerTypeRequest single_req;
+  single_req.set_vehicle_id(vid_a);
+  *single_req.mutable_start_time() = data::DefaultTimeRange().start;
+  *single_req.mutable_end_time() = data::DefaultTimeRange().end;
+  GetCostByChargerTypeResponse single_resp;
+  grpc::ClientContext single_ctx;
+  ASSERT_TRUE(stub->GetCostByChargerType(&single_ctx, single_req, &single_resp).ok());
+  double total_single = 0;
+  for (const auto& b : single_resp.breakdowns()) total_single += b.total_cost();
+  EXPECT_GT(total_no_filter, total_single);
+}
+
+// Task 41 gap closure: vehicle_id empty validator (display_service.cc
+// line 45-50) — GetVehicleCostSummary rejects empty vehicle_id with
+// INVALID_ARGUMENT before any SQL execution.
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_EmptyVehicleId_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetVehicleCostSummaryRequest req;
+  // vehicle_id intentionally left empty.
+  *req.mutable_start_time() = data::DefaultTimeRange().start;
+  *req.mutable_end_time() = data::DefaultTimeRange().end;
+  VehicleCostSummary resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// Task 41 gap closure: GetMonthlyReport year/month validators (line
+// 133-138). Rejects year < 1900 or month < 1 or month > 12 with
+// INVALID_ARGUMENT.
+TEST_F(DisplayServiceIT, GetMonthlyReport_InvalidYear_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(1899);   // < 1900 → INVALID_ARGUMENT
+  req.set_month(1);
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetMonthlyReport_InvalidMonth_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyReportRequest req;
+  req.set_year(2023);
+  req.set_month(13);   // > 12 → INVALID_ARGUMENT
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// Task 41 gap closure: GetAnnualReport year validator (line 220-225).
+TEST_F(DisplayServiceIT, GetAnnualReport_InvalidYear_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualReportRequest req;
+  req.set_year(1899);  // < 1900 → INVALID_ARGUMENT
+  req.set_vehicle_id(vid);
+  PeriodReport resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->GetAnnualReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
