@@ -225,6 +225,76 @@ TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// Gap closure: setting service_fee exercises the nullable wrapper
+// append path (line 123) and the read-back parse (line 54).
+TEST_F(ChargingServiceIT, CreateCharging_WithServiceFee_RoundTrip) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  CreateChargingRequest req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.mutable_service_fee()->set_value(2.50);
+  Charging resp;
+  grpc::ClientContext c;
+  ASSERT_TRUE(stub->CreateCharging(&c, req, &resp).ok());
+  EXPECT_TRUE(resp.has_service_fee());
+  EXPECT_DOUBLE_EQ(resp.service_fee().value(), 2.50);
+}
+
+// Gap closure: setting remark exercises the non-empty append path
+// (line 139) and the read-back (line 62).
+TEST_F(ChargingServiceIT, CreateCharging_WithRemark_RoundTrip) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  CreateChargingRequest req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.set_remark("test charging");
+  Charging resp;
+  grpc::ClientContext c;
+  ASSERT_TRUE(stub->CreateCharging(&c, req, &resp).ok());
+  EXPECT_EQ(resp.remark(), "test charging");
+}
+
+// Gap closure: empty location exercises the NULL append path (line 132).
+TEST_F(ChargingServiceIT, CreateCharging_EmptyLocation_NullRoundTrip) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  CreateChargingRequest req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.clear_location();
+  Charging resp;
+  grpc::ClientContext c;
+  ASSERT_TRUE(stub->CreateCharging(&c, req, &resp).ok());
+  EXPECT_TRUE(resp.location().empty());
+}
+
+// Gap closure: CreateCharging with cost <= 0 exercises the cost
+// validator at charging_service.cc line 86-89.
+TEST_F(ChargingServiceIT, CreateCharging_NonPositiveCost_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.set_cost(0.0);
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// Gap closure: CreateCharging with end_percent <= start_percent
+// exercises the end_percent validator at line 78-81.
+TEST_F(ChargingServiceIT, CreateCharging_NonIncreasingPercent_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.set_end_percent(20);
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 // Task 19: DeleteCharging happy path. Mints a charging via the helper
 // chain, deletes it, then asserts the post-condition by issuing a
 // GetCharging for the same id and expecting NOT_FOUND — proves the
