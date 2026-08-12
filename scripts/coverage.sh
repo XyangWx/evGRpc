@@ -42,8 +42,19 @@ if [[ -z "${DATABASE_URL:-}" || -z "${EVGRPC_TEST_DATABASE_URL:-}" ]]; then
 fi
 
 # --- Configure + build ---
-echo ">>> Configuring (EVGRPC_COVERAGE=ON) ..."
-cmake -S . -B "$BUILD_DIR" -DEVGRPC_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug >/dev/null
+# Skip cmake reconfigure if cache already has EVGRPC_COVERAGE=ON. This
+# matters because cmake -B on an existing build dir can trigger FetchContent
+# to re-evaluate and rebuild the full _deps tree (libprotobuf, grpc,
+# abseil, spdlog — hundreds of .cc files, ~30 min wall-clock). The
+# cache-skip path keeps incremental builds fast.
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]] \
+   && grep -q "EVGRPC_COVERAGE:BOOL=ON" "$BUILD_DIR/CMakeCache.txt" \
+   && [[ "${RECONFIGURE:-0}" != "1" ]]; then
+  echo ">>> Cache has EVGRPC_COVERAGE=ON, skipping reconfigure (RECONFIGURE=1 to force)"
+else
+  echo ">>> Configuring (EVGRPC_COVERAGE=ON) ..."
+  cmake -S . -B "$BUILD_DIR" -DEVGRPC_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug >/dev/null
+fi
 
 echo ">>> Building ..."
 cmake --build "$BUILD_DIR" --target evgrpc_integration_tests -j
