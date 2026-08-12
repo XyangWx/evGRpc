@@ -46,6 +46,22 @@ EVGRPC_TEST_DB_PASSWORD=… ./build/tests/integration/evgrpc_e2e_tests
 - The e2e test truncates `vehicle ... CASCADE` at the start, so it's
   re-runnable without manual cleanup.
 
+## Coverage
+
+Run the integration test suite with coverage instrumentation:
+
+```sh
+DATABASE_URL='postgresql://evgrpc_admin:***@127.0.0.1:5432/evgrpc' \
+EVGRPC_TEST_DATABASE_URL="$DATABASE_URL" \
+./scripts/coverage.sh
+```
+
+The script builds with `--coverage`, runs `evgrpc_integration_tests`, asserts ≥ 95% line coverage averaged across `src/services/*.cc`, and exits non-zero on failure. HTML report: `cmake-build-cov/coverage_html/index.html`.
+
+Override thresholds via env vars: `COVERAGE_THRESHOLD=90`, `RUNTIME_THRESHOLD=120`.
+
+Required tools: `apt install lcov` (Debian/Ubuntu) or `brew install lcov` (macOS). `genhtml` ships with lcov.
+
 ## Run (host)
 
 ```sh
