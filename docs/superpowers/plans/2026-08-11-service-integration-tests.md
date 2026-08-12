@@ -1345,7 +1345,7 @@ UpdateChargingRequest ToUpdateChargingRequest(const CreateChargingRequest& src) 
 // In tests/integration/charging_service_test.cc, file scope (above the
 // first TEST_F), with the other TEST_F's inheriting from ServiceITBase.
 TEST_F(ChargingServiceIT, DataHelpers_ProduceValidIds) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   EXPECT_FALSE(vid.empty());
@@ -1382,7 +1382,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "feat(test)
 class ChargingServiceIT : public ServiceITBase {};
 
 TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1399,7 +1399,7 @@ TEST_F(ChargingServiceIT, CreateCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
-  auto channel = channel();
+  auto chan = channel();
   const auto sid = data::CreateSourceCategoryId(channel);  // real
   auto stub = ChargingService::NewStub(channel);
   auto req = data::MakeValidCreateChargingRequest(
@@ -1415,7 +1415,7 @@ TEST_F(ChargingServiceIT, CreateCharging_InvalidVehicleId_InvalidArgument) {
 
 ```cpp
 TEST_F(ChargingServiceIT, CreateCharging_NonPositiveKwh_InvalidArgument) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1445,7 +1445,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, GetCharging_HappyPath) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   const auto cid = data::CreateChargingId(channel, vid, sid);
@@ -1484,7 +1484,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1508,7 +1508,7 @@ TEST_F(ChargingServiceIT, UpdateCharging_HappyPath) {
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1528,7 +1528,7 @@ TEST_F(ChargingServiceIT, UpdateCharging_NotFound) {
 
 ```cpp
 TEST_F(ChargingServiceIT, UpdateCharging_EndTimeBeforeStart_InvalidArgument) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   auto stub = ChargingService::NewStub(channel);
@@ -1564,7 +1564,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, DeleteCharging_HappyPath) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   const auto cid = data::CreateChargingId(channel, vid, sid);
@@ -1607,7 +1607,7 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "test(charg
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_HappyPath_MultipleRows) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   for (int i = 0; i < 3; ++i) {
@@ -1642,7 +1642,7 @@ TEST_F(ChargingServiceIT, ListChargings_Empty) {
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_Pagination) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   for (int i = 0; i < 5; ++i) {
@@ -1717,7 +1717,7 @@ If `lcov --summary charging.info` reports < 95%, add the cases below:
 
 ```cpp
 TEST_F(ChargingServiceIT, ListChargings_FilterByVehicleId) {
-  auto channel = channel();
+  auto chan = channel();
   const auto vid = data::CreateVehicleId(channel);
   const auto sid = data::CreateSourceCategoryId(channel);
   // Create 3 chargings on this vehicle + 1 on a different vehicle
@@ -3737,21 +3737,54 @@ git -c user.email='openclaw@local' -c user.name='openclaw' commit -m "ci(coverag
 
 ---
 
-### End of Chunk 7
+### End of Chunk 7 (reconciled post-execution)
 
 After Chunk 7 lands, **the plan is complete**:
 - All 7 chunks (1-7) have been executed
-- 7 service RPC suites (60+ integration tests across 6 services)
+- 6 service RPC suites (74 integration tests across 6 services)
 - `scripts/coverage.sh` enforces ≥ 95% line coverage on `src/services/*.cc`
 - `ctest -L coverage` runs the script
 
-**Spec §10 acceptance criteria all met:**
+**Spec §10 acceptance criteria status:**
 1. ✅ `cmake --build` succeeds with `-DEVGRPC_COVERAGE=ON` (Task 6 of Chunk 1)
-2. ✅ `ctest -R evgrpc_integration_tests` passes 100%, ≤ 60s wall-clock (Tasks 22/30/41/45 conditional closures + runtime gate)
-3. ✅ `lcov` summary reports `lines......: 95.0%` or higher on `src/services/` (Task 47 + 50)
+2. ✅ `ctest -R evgrpc_integration_tests` passes 100%, ~5s wall-clock (Tasks 22/30/41/45 conditional closures + runtime gate)
+3. ⚠️ `lcov` summary — script written + 95% gate implemented; **end-to-end smoke (Task 50) deferred** because the sandbox process session timed out mid-rebuild of `_deps` (cmake reconfigure invalidated cmake-build-cov state, forcing full libprotobuf/grpc/abseil/spdlog rebuild — 30+ min wall-clock). Script logic is unit-checked (threshold parse, exit code, HTML path) but full pipeline needs a fresh CI environment. See commit 69d6a7f.
 4. ✅ Smoke test (`evgrpc_e2e_tests`) still passes unchanged (Chunk 1 Task 2)
 5. ✅ `grep -RIn 'bypass = true' src/ tests/` returns exactly one match (Chunks 1-7 never write a literal `true`; Chunk 2 Task 1 Step 5 uses `kEnableBypassForTest` constant)
-6. ✅ `scripts/coverage.sh` runs end-to-end and exits 0 (Task 47 + 50)
+6. ⚠️ `scripts/coverage.sh` exit 0 — script verified by force-fail path (threshold=999); full pass path deferred per (3)
+
+**Production bugs caught by Chunk 5 smoke tests (9 total, all in `src/services/*.cc`):**
+
+Plan-time observations vs. runtime discoveries:
+
+| # | Where | Bug | Fix commit |
+|---|---|---|---|
+| 1 | `consumption_service.cc:116/122/146/183/239/243/320` | `End` (reserved keyword) → `EndTime` | `ec0e92d` |
+| 2 | `display_service.cc:547` | `c."End"` → `c."EndTime"` | `69d0d85` |
+| 3 | `display_service.cc:~60-64/146-149/218-221` (precursor) | `VehicleId = $1` (uuid = text) | `1d25020` |
+| 4 | `display_service.cc:85/184/262/427` | `end_mileage - begin_mileage` → `EndMileage - BeginMileage` (case-fold) | `1d25020` |
+| 5 | `display_service.cc:88/89/185/186/263` | `"Start"` (case-sensitive) → `Start` (case-folded) | `1d25020` |
+| 6 | `display_service.cc:7 list-style RPCs` | `VehicleId = $1` (uuid = text) | `9fc79cf` |
+| 7 | `display_service.cc:3 list-style RPCs` | `c.VehicleId = $1` (uuid = text, qualified alias) | `bb852ee` |
+| 8 | `display_service.cc:511` | `SUM(StartRange - EndRange) FROM charging` → `FROM consumption` | `e9434f7` |
+| 9 | `display_service.cc:591` | `c."EndTime"` (case-sensitive) → `c.EndTime` | `508f9f3` |
+| 10 | `display_service.cc:86 (CTE k)` | `VehicleId = $1` (uuid = text, bare equality) | `15f393f` |
+
+Plus the earlier Task 15 / Chunk 3 `charger_type` case fix (`ad28ba5`).
+
+**Generalized lesson:** `sql/001_initial.sql` is the source of truth. Any production SQL that references column names, types, or case-folded identifiers must be cross-checked against the schema. Common drift patterns:
+- Reserved SQL keywords (`End`, `Start`) used as bare identifiers → syntax error
+- Mixed-case schema columns (`EndTime`, `EndMileage`, `BeginMileage`, `EndRange`, `BeginRange`) referenced with underscores → case-fold mismatch
+- `uuid` columns compared to text binds without `::text` cast → type mismatch
+- Quoted identifiers (`"Start"`, `"End"`) used to "escape" reserved words, but the schema already case-folds to lowercase → no match
+- Column name drift across tables (e.g. `charging` has `KwhCharged` / `StartTime`; `consumption` has `EndMileage` / `Start`)
+
+**Plan-level deviations applied during execution (now reconciled):**
+- `auto channel = channel();` → `auto chan = channel();` in Tasks 16/17/18/20 (12 occurrences) — `ServiceITBase::channel()` accessor shadows `auto channel` variable; shadow compile error. All implementers self-corrected.
+- Task 23 commit: 5 files (added `consumption_service_test.cc` + `CMakeLists.txt`) instead of plan's 3
+- Chunk 4 Test 23 / Chunk 5 Test 31 used `data::CopyToUpdateRequest` for Consumption in `evgrpc::test::data` namespace (not anonymous) — different param types from Charging's anon-namespace CopyToUpdateRequest, so no overload conflict
+- Task 50 end-to-end smoke deferred (sandbox timeout, not plan bug)
+- DisplayService SQL fixes (commits `69d0d85`, `1d25020`, `9fc79cf`, `bb852ee`, `e9434f7`, `508f9f3`, `15f393f`) all caught by Chunk 5 Task 32+ smoke tests
 
 **Ready for execution handoff** — invoke `subagent-driven-development` per writing-plans skill.
 
