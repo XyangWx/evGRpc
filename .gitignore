@@ -62,7 +62,7 @@ build.ninja
 *.gcno
 *.gcda
 *.gcov
-coverage.*
+coverage.out
 *.cover
 .coverage
 htmlcov/
