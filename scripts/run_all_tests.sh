@@ -115,6 +115,21 @@ for r in "${RESULTS[@]}"; do
   echo "  $r"
 done
 
+# Log artifacts — all logs centralized to repo-root ./log/.
+echo
+echo "------------------------------------------------------------"
+echo "  Logs (./log/ — centralized location)"
+echo "------------------------------------------------------------"
+if [[ -d "$REPO_ROOT/log" ]]; then
+  find "$REPO_ROOT/log" -type f -printf "  %p  (%s bytes)\n" 2>/dev/null | sort
+  total=$(find "$REPO_ROOT/log" -type f -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+  count=$(find "$REPO_ROOT/log" -type f 2>/dev/null | wc -l)
+  echo "  ---"
+  echo "  ${count} file(s), ${total} bytes total"
+else
+  echo "  (no ./log/ directory — tests didn't write any file-sink logs)"
+fi
+
 # Exit non-zero if any suite failed (not skipped).
 for r in "${RESULTS[@]}"; do
   if [[ "$r" == FAIL* ]]; then
