@@ -97,7 +97,7 @@ lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
   }
   END {
     if (n > 0) printf "lines average across %d services files: %.1f%%\n", n, sum/n
-    else print "ERROR: no src/services/*.cc files in coverage.info" >&2
+    else print "ERROR: no src/services/*.cc files in coverage.info" > "/dev/stderr"
   }
 '
 
