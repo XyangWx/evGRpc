@@ -58,11 +58,14 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  evgrpc::log::InitDefaults();
+
   evgrpc::RuntimeConfig cfg;
   try {
     cfg = evgrpc::LoadConfig(args.config_path);
   } catch (const std::exception& e) {
-    std::cerr << "[evgrpc-config] " << e.what() << std::endl;
+    auto server_log = evgrpc::log::Get("server");
+    server_log->critical("config load failed: {}", e.what());
     return 1;
   }
 

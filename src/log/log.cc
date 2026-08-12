@@ -93,4 +93,13 @@ void SetLevel(spdlog::level::level_enum level) {
   });
 }
 
+void InitDefaults() {
+  LogConfig defaults;
+  defaults.level = "info";
+  defaults.file = "";        // no file sink yet
+  defaults.max_size_mb = 100;
+  defaults.max_files = 7;
+  Init(defaults);
+}
+
 }  // namespace evgrpc::log

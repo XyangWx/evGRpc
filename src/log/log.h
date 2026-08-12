@@ -25,6 +25,13 @@ namespace evgrpc::log {
 //   auth, service, db, jwks, server.
 void Init(const evgrpc::LogConfig& cfg);
 
+// Initialize logging with safe defaults (stderr + stdout sinks, level
+// = info, no file). Use this BEFORE parsing config.json so that early
+// errors (e.g. OIDC discovery failure during LoadConfig) still land
+// somewhere visible. Call Init(cfg.log) afterward to upgrade with the
+// resolved log.file / log.level from config.json.
+void InitDefaults();
+
 // Look up a named logger. Lazy-creates if not registered.
 std::shared_ptr<spdlog::logger> Get(const std::string& name);
 
