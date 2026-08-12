@@ -97,10 +97,10 @@ lcov --capture --directory "$BUILD_DIR" \
 
 echo ">>> Services coverage summary:"
 SERVICES_COV=$(awk '
-  /^SF:.*src.services.*\.cc$/ { in_services=1; next }
+  /^SF:.*src.services.*\.cc$/ { in_services=1; n_files++; next }
   /^end_of_record/ { in_services=0 }
-  in_services && /^LF:/ { lf += $2 }
-  in_services && /^LH:/ { lh += $2 }
+  in_services && /^LF:/ { lf += substr($0, 4) }
+  in_services && /^LH:/ { lh += substr($0, 4) }
   END {
     if (lf > 0) {
       pct = (lh / lf) * 100
@@ -116,8 +116,8 @@ SERVICES_COV=$(awk '
 COVERAGE_PCT=$(awk '
   /^SF:.*src.services.*\.cc$/ { in_services=1; next }
   /^end_of_record/ { in_services=0 }
-  in_services && /^LF:/ { lf += $2 }
-  in_services && /^LH:/ { lh += $2 }
+  in_services && /^LF:/ { lf += substr($0, 4) }
+  in_services && /^LH:/ { lh += substr($0, 4) }
   END { if (lf > 0) printf "%.1f", (lh / lf) * 100; else print "" }
 ' "$COVERAGE_INFO")
 echo "$SERVICES_COV"
