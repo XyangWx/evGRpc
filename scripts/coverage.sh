@@ -97,7 +97,7 @@ lcov --capture --directory "$BUILD_DIR" \
 
 echo ">>> Services coverage summary:"
 SERVICES_COV=$(awk '
-  /^SF:/ && /\/src\/services\/.*\.cc$/ { in_services=1; next }
+  /^SF:.*src.services.*\.cc$/ { in_services=1; next }
   /^end_of_record/ { in_services=0 }
   in_services && /^LF:/ { lf += $2 }
   in_services && /^LH:/ { lh += $2 }
@@ -114,7 +114,7 @@ SERVICES_COV=$(awk '
 
 # Compute the actual percentage separately so COVERAGE_PCT is a clean float.
 COVERAGE_PCT=$(awk '
-  /^SF:/ && /\/src\/services\/.*\.cc$/ { in_services=1; next }
+  /^SF:.*src.services.*\.cc$/ { in_services=1; next }
   /^end_of_record/ { in_services=0 }
   in_services && /^LF:/ { lf += $2 }
   in_services && /^LH:/ { lh += $2 }
