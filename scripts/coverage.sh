@@ -81,7 +81,7 @@ COVERAGE_INFO="$BUILD_DIR/coverage.info"
 lcov --capture --directory "$BUILD_DIR" \
      --output-file "$COVERAGE_INFO" \
      --exclude '*/generated/*' --exclude '*/_deps/*' --exclude '*/tests/*' \
-     --ignore-errors mismatch
+     --ignore-errors mismatch,gcov,negative
 
 echo ">>> Services coverage summary:"
 lcov --summary "$COVERAGE_INFO" 2>&1 | awk '
