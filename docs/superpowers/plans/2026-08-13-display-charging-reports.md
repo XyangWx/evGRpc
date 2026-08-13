@@ -946,6 +946,8 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_Empty) {
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(stub->GetAnnualChargingReport(&ctx, req, &resp).ok());
   EXPECT_EQ(resp.count(), 0);
+  EXPECT_EQ(resp.total_cost(), 0.0);
+  EXPECT_EQ(resp.total_kwh(), 0.0);
 }
 
 TEST_F(DisplayServiceIT, GetAnnualChargingReport_VehicleFilter) {
@@ -982,7 +984,7 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_YearBelow1900_InvalidArgument) 
 }
 ```
 
-(9 tests for Monthly+Annual: 3 happy + 2 empty + 2 vehicle + 2 invalid.)
+(9 tests for Monthly+Annual: 2 happy + 2 empty + 2 vehicle + 3 invalid — Monthly has Year+Month invalid tests, Annual has only Year invalid test.)
 
 - [ ] **Step 2: Build and run — expect FAIL (handlers not implemented)**
 
