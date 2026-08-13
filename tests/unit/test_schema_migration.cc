@@ -92,6 +92,90 @@ TEST_F(SchemaMigrationTest, ChargingTimestamptzMigrationIsIdempotent) {
   EXPECT_EQ(ColumnType("EndTime"),   "timestamp with time zone");
 }
 
+TEST_F(SchemaMigrationTest, ChargingTimestamptzMigrationPerformsActualAlter) {
+  // The existing idempotent test cannot prove the ALTER actually runs
+  // (initial state is already TIMESTAMPTZ). This test resets the
+  // charging table to bare TIMESTAMP columns (the pre-002 state) and
+  // verifies the migration promotes them to TIMESTAMPTZ. A typo in
+  // the AT TIME ZONE 'UTC' clause (e.g. 'EST') would either fail or
+  // produce a shift, and this test would catch it.
+  //
+  // Declared last so the destructive DROP/CREATE does not interfere
+  // with the other SchemaMigrationTest tests (GoogleTest runs in
+  // declaration order).
+  const std::string migration_path = EVGRPC_MIGRATION_002_PATH;
+  ASSERT_FALSE(migration_path.empty())
+      << "EVGRPC_MIGRATION_002_PATH not set; CMake should inject it";
+
+  auto apply = [&] {
+    std::ifstream f(migration_path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    pqxx::work tx(*conn_);
+    tx.exec(ss.str());
+    tx.commit();
+  };
+
+  // Step 1: drop the current (TIMESTAMPTZ) charging table. CASCADE
+  // also drops the FK constraints on vehicle.Id and source_category.Id
+  // without touching those tables.
+  {
+    pqxx::work tx(*conn_);
+    tx.exec("DROP TABLE charging CASCADE");
+    tx.commit();
+  }
+
+  // Step 2: recreate charging with bare TIMESTAMP for StartTime and
+  // EndTime — matching sql/001_initial.sql's structure but with the
+  // pre-migration column types. Reuses the existing charger_type_enum
+  // type created by SetUpTestSuite().
+  ASSERT_NO_THROW({
+    pqxx::work tx(*conn_);
+    tx.exec(
+        "CREATE TABLE charging ("
+        "  Id                    UUID PRIMARY KEY,"
+        "  VehicleId             UUID NOT NULL REFERENCES vehicle(Id),"
+        "  StartTime             TIMESTAMP NOT NULL,"
+        "  EndTime               TIMESTAMP NOT NULL,"
+        "  StartPercent          INT NOT NULL,"
+        "  EndPercent            INT NOT NULL,"
+        "  StartMileage          INT NOT NULL,"
+        "  EndMileage            INT NOT NULL,"
+        "  KwhCharged            DECIMAL(10,2) NOT NULL,"
+        "  Cost                  DECIMAL(10,2) NOT NULL,"
+        "  ElectricityUnitPrice  DECIMAL(4,2)  NOT NULL,"
+        "  ServiceFee            DECIMAL(5,2),"
+        "  ChargerType           charger_type_enum NOT NULL,"
+        "  SourceCategoryId      UUID NOT NULL REFERENCES source_category(Id),"
+        "  Location              VARCHAR(100),"
+        "  Remark                TEXT"
+        ")");
+    tx.commit();
+  });
+
+  // Step 3: confirm pre-migration state — both columns are bare
+  // TIMESTAMP (the migration's WHERE clause will match).
+  EXPECT_EQ(ColumnType("StartTime"), "timestamp without time zone");
+  EXPECT_EQ(ColumnType("EndTime"),   "timestamp without time zone");
+
+  // Step 4: run migration. The DO $$ guard should now match and
+  // ALTER both columns to TIMESTAMPTZ.
+  ASSERT_NO_THROW(apply());
+
+  // Step 5: post-migration state — both columns are TIMESTAMPTZ.
+  EXPECT_EQ(ColumnType("StartTime"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("EndTime"),   "timestamp with time zone");
+
+  // Step 6: cleanup — re-run migration. Since the columns are already
+  // TIMESTAMPTZ, the DO $$ guard's WHERE clause (data_type = 'timestamp
+  // without time zone') no longer matches; the ALTER is skipped. This
+  // restores the table to the state expected by the rest of the suite
+  // and verifies idempotency end-to-end.
+  ASSERT_NO_THROW(apply());
+  EXPECT_EQ(ColumnType("StartTime"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("EndTime"),   "timestamp with time zone");
+}
+
 TEST_F(SchemaMigrationTest, TimestamptzRoundTripAcrossSessions) {
   // After migration, an instant stored in one TZ reads back as the
   // same UTC instant when read in a different TZ. This is the core
