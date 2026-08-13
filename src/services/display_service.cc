@@ -705,4 +705,119 @@ grpc::Status DisplayServiceImpl::GetDailyChargingReport(
   }
 }
 
+grpc::Status DisplayServiceImpl::GetMonthlyChargingReport(
+    grpc::ServerContext* ctx, const GetMonthlyChargingReportRequest* req,
+    ChargingReport* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetMonthlyChargingReport";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  if (req->year() < 1900) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "year must be >= 1900");
+    scope.set_status(s); return s;
+  }
+  if (req->month() < 1 || req->month() > 12) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "month must be 1..12");
+    scope.set_status(s); return s;
+  }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    pqxx::params p;
+    p.append(req->year()); p.append(req->month());
+    p.append(req->vehicle_id());
+    const std::string sql =
+        "SELECT "
+        "  COALESCE(SUM(c.Cost), 0)::DOUBLE PRECISION AS total_cost, "
+        "  COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh, "
+        "  COUNT(*)::INT AS count "
+        "FROM charging c "
+        "WHERE EXTRACT(YEAR  FROM c.StartTime) = $1 "
+        "  AND EXTRACT(MONTH FROM c.StartTime) = $2 "
+        "  AND (length($3) = 0 OR c.VehicleId::text = $3)";
+    auto result = db::Exec(tx, sql, "DisplayService.GetMonthlyChargingReport", p);
+    resp->set_year(req->year());
+    resp->set_month(req->month());
+    if (!req->vehicle_id().empty()) resp->set_vehicle_id(req->vehicle_id());
+    if (!result.empty()) {
+      const auto& row = result[0];
+      resp->set_total_cost(row["total_cost"].as<double>());
+      resp->set_total_kwh(row["total_kwh"].as<double>());
+      resp->set_count(row["count"].as<int>());
+    } else {
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. Defensive fallback retained
+      // in case future SQL changes (e.g. dropping a COALESCE)
+      // introduce a truly-empty result set.
+      resp->set_total_cost(0.0);
+      resp->set_total_kwh(0.0);
+      resp->set_count(0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetAnnualChargingReport(
+    grpc::ServerContext* ctx, const GetAnnualChargingReportRequest* req,
+    ChargingReport* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetAnnualChargingReport";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  if (req->year() < 1900) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "year must be >= 1900");
+    scope.set_status(s); return s;
+  }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    pqxx::params p;
+    p.append(req->year());
+    p.append(req->vehicle_id());
+    const std::string sql =
+        "SELECT "
+        "  COALESCE(SUM(c.Cost), 0)::DOUBLE PRECISION AS total_cost, "
+        "  COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh, "
+        "  COUNT(*)::INT AS count "
+        "FROM charging c "
+        "WHERE EXTRACT(YEAR FROM c.StartTime) = $1 "
+        "  AND (length($2) = 0 OR c.VehicleId::text = $2)";
+    auto result = db::Exec(tx, sql, "DisplayService.GetAnnualChargingReport", p);
+    resp->set_year(req->year());
+    if (!req->vehicle_id().empty()) resp->set_vehicle_id(req->vehicle_id());
+    if (!result.empty()) {
+      const auto& row = result[0];
+      resp->set_total_cost(row["total_cost"].as<double>());
+      resp->set_total_kwh(row["total_kwh"].as<double>());
+      resp->set_count(row["count"].as<int>());
+    } else {
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. Defensive fallback retained
+      // in case future SQL changes (e.g. dropping a COALESCE)
+      // introduce a truly-empty result set.
+      resp->set_total_cost(0.0);
+      resp->set_total_kwh(0.0);
+      resp->set_count(0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
+    scope.set_status(s);
+    return s;
+  }
+}
+
 }  // namespace evgrpc

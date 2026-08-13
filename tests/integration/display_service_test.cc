@@ -743,4 +743,148 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_Feb30_InvalidArgument) {
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+TEST_F(DisplayServiceIT, GetMonthlyChargingReport_HappyPath_MultipleRows) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  // Helper fixed StartTime = 2023-11-14 (1700000000 epoch) — query
+  // for that exact month so all 3 events land in the monthly bucket.
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  GetMonthlyChargingReportRequest req;
+  req.set_year(2023); req.set_month(11);
+  req.set_vehicle_id(vid);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetMonthlyChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 3);
+  EXPECT_EQ(resp.year(), req.year());
+  EXPECT_EQ(resp.month(), req.month());
+  EXPECT_EQ(resp.day(), 0);   // monthly → day=0
+  EXPECT_GT(resp.total_kwh(), 0.0);
+}
+
+TEST_F(DisplayServiceIT, GetMonthlyChargingReport_Empty) {
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyChargingReportRequest req;
+  req.set_year(2026); req.set_month(8);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetMonthlyChargingReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 0);
+  EXPECT_EQ(resp.total_cost(), 0.0);
+  EXPECT_EQ(resp.total_kwh(), 0.0);
+}
+
+TEST_F(DisplayServiceIT, GetMonthlyChargingReport_VehicleFilter) {
+  auto chan = channel();
+  const auto vid_a = data::CreateVehicleId(chan);
+  const auto vid_b = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  // All 4 events land in 2023-11 (helper fixed). Query with
+  // vehicle_id = A; should return only A's 2 rows.
+  for (int i = 0; i < 2; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid_a, sid), &v).ok());
+    Charging v2; grpc::ClientContext c2;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
+  }
+  GetMonthlyChargingReportRequest req;
+  req.set_year(2023); req.set_month(11);
+  req.set_vehicle_id(vid_a);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetMonthlyChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 2);
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
+}
+
+TEST_F(DisplayServiceIT, GetMonthlyChargingReport_YearBelow1900_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyChargingReportRequest req;
+  req.set_year(1899); req.set_month(1);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetMonthlyChargingReport_MonthOutOfRange_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetMonthlyChargingReportRequest req;
+  req.set_year(2026); req.set_month(13);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetMonthlyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetAnnualChargingReport_HappyPath_MultipleRows) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  // Helper fixed StartTime = 2023-11-14 — query for that year.
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  GetAnnualChargingReportRequest req;
+  req.set_year(2023);
+  req.set_vehicle_id(vid);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetAnnualChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 3);
+  EXPECT_EQ(resp.year(), req.year());
+  EXPECT_EQ(resp.month(), 0);   // annual → month=0
+  EXPECT_EQ(resp.day(), 0);     // annual → day=0
+}
+
+TEST_F(DisplayServiceIT, GetAnnualChargingReport_Empty) {
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualChargingReportRequest req;
+  req.set_year(2026);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetAnnualChargingReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 0);
+  EXPECT_EQ(resp.total_cost(), 0.0);
+  EXPECT_EQ(resp.total_kwh(), 0.0);
+}
+
+TEST_F(DisplayServiceIT, GetAnnualChargingReport_VehicleFilter) {
+  auto chan = channel();
+  const auto vid_a = data::CreateVehicleId(chan);
+  const auto vid_b = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  // All 4 events in 2023 (helper fixed). Query with vehicle_id = A.
+  for (int i = 0; i < 2; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid_a, sid), &v).ok());
+    Charging v2; grpc::ClientContext c2;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
+  }
+  GetAnnualChargingReportRequest req;
+  req.set_year(2023);
+  req.set_vehicle_id(vid_a);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetAnnualChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 2);
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
+}
+
+TEST_F(DisplayServiceIT, GetAnnualChargingReport_YearBelow1900_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetAnnualChargingReportRequest req;
+  req.set_year(1899);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetAnnualChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test

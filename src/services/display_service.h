@@ -51,6 +51,14 @@ class DisplayServiceImpl final : public DisplayService::Service {
       grpc::ServerContext* ctx,
       const GetDailyChargingReportRequest* req,
       ChargingReport* resp) override;
+  grpc::Status GetMonthlyChargingReport(
+      grpc::ServerContext* ctx,
+      const GetMonthlyChargingReportRequest* req,
+      ChargingReport* resp) override;
+  grpc::Status GetAnnualChargingReport(
+      grpc::ServerContext* ctx,
+      const GetAnnualChargingReportRequest* req,
+      ChargingReport* resp) override;
 
  private:
   PgPool* pool_;
