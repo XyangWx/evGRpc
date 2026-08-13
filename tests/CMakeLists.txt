@@ -20,6 +20,7 @@ add_executable(evgrpc_tests
   unit/test_pg_container.cc
   unit/test_pg_container_config.cc
   unit/test_schema_migration.cc
+  unit/test_last_day_of_month.cc
 )
 target_link_libraries(evgrpc_tests PRIVATE
   gtest

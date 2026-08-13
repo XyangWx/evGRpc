@@ -3,6 +3,7 @@ add_library(evgrpc_util
   rpc_scope.cc
   req_id.cc
   args.cc
+  last_day_of_month.cc
 )
 target_link_libraries(evgrpc_util PUBLIC
   evgrpc_log
