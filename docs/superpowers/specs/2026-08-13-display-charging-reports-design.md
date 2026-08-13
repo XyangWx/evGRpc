@@ -434,7 +434,7 @@ For "vehicle filter":
 | `GetDailyChargingReport_Feb30_InvalidArgument` | daily | day=30, month=2 → INVALID_ARGUMENT (was v1's "OK + zero") |
 | `GetDailyChargingReport_Apr31_InvalidArgument` | daily | day=31, month=4 → INVALID_ARGUMENT |
 | `GetDailyChargingReport_LeapYear_Feb29_HappyPath` | daily | Feb 29 in leap year → OK |
-| `GetDailyChargingReport_TzBoundary_MidnightRollsToNextDay` | daily | charging at 23:30Z grouped in Asia/Shanghai next day |
+| `ChargingReportTzTest.Daily_AsiaShanghai_RollsToNextDay` (unit) | daily | charging at 23:30Z grouped in Asia/Shanghai next day (see §9.3 for why this is a unit test, not a gRPC IT) |
 | `GetMonthlyChargingReport_HappyPath_MultipleRows` | monthly | events spanning 3 days in same month → aggregates |
 | `GetMonthlyChargingReport_Empty` | monthly | no data → OK + zeros |
 | `GetMonthlyChargingReport_VehicleFilter` | monthly | filter |
