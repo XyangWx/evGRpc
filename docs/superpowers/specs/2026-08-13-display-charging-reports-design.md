@@ -94,10 +94,12 @@ get TIMESTAMPTZ from the start.
 ## 3. Non-Goals
 
 - Modifying or deprecating the existing `PeriodReport`,
-  `GetMonthlyReport`, or `GetAnnualReport`. They keep their current
-  behavior — though after this migration they become session-TZ-aligned
-  on the charging side (because `charging.StartTime` is now
-  TIMESTAMPTZ). See §10.
+  `GetMonthlyReport`, or `GetAnnualReport`. **RPC signatures stay
+  unchanged**, but the charging-side grouping **becomes
+  session-TZ-aligned** after the migration (because `charging.StartTime`
+  is now TIMESTAMPTZ). This is a **behavior change**, not a non-change
+  — see §10.1 for the implications (old RPCs mix charging session-TZ
+  with consumption UTC, an inconsistency amplified by the migration).
 - Migrating `consumption.Start` / `consumption.EndTime` to TIMESTAMPTZ.
   This is a **separate spec** because it affects the consumption
   service's parse/insert path and possibly the existing
@@ -245,10 +247,14 @@ databases, a new migration file
 BEGIN;
 
 DO $$ BEGIN
+  -- Guard checks BOTH columns to be robust against partial-migration
+  -- states (e.g. someone ran a half-finished migration manually). If
+  -- either column is still bare TIMESTAMP, we run the ALTER — and PG
+  -- will be a no-op for any column already TIMESTAMPTZ.
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'charging'
-      AND column_name = 'StartTime'
+      AND column_name IN ('StartTime', 'EndTime')
       AND data_type = 'timestamp without time zone'
   ) THEN
     ALTER TABLE charging
@@ -526,6 +532,7 @@ TEST(SchemaMigration, ChargingTimestamptzMigrationIsIdempotent) {
 proto/evgrpc/display.proto                                       [MOD] +ChargingReport, +3 requests, +3 rpc
 src/proto/evgrpc/display.pb.cc + display.pb.h                     [AUTO] protoc regen
 src/proto/evgrpc/display_grpc.pb.cc + display_grpc.pb.h           [AUTO] protoc regen
+src/services/display_service.h                                   [MOD] +3 handler declarations
 src/services/display_service.cc                                  [MOD] +3 handler impls (~150 lines)
 src/util/last_day_of_month.{h,cc}                                [NEW] small helper for §7 validator
 sql/001_initial.sql                                              [MOD] TIMESTAMP → TIMESTAMPTZ for charging
