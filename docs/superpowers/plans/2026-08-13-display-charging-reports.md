@@ -1190,86 +1190,208 @@ filters. 9 new IT cases. Total ChargingReport coverage now: 7 daily
 
 > Goal: prove the TZ-awareness claim from spec §2.4 holds, plus cover the leap-year and Apr31 cases that exercise the day-validity validator.
 
-### Task 4.1: TZ-boundary test (Asia/Shanghai midnight rollover)
+### Task 4.1: TZ-awareness SQL test (direct libpqxx, no gRPC)
 
 **Files:**
-- Modify: `tests/integration/display_service_test.cc`
+- Create: `tests/unit/test_charging_report_tz.cc`
+- Modify: `tests/CMakeLists.txt`
 
-- [ ] **Step 1: Write the test**
+> **Why this is a unit test, not a gRPC IT**: PgContainer-backed TestServer creates its own PgPool from the conninfo string. The pool's session TZ is whatever the postmaster was started with (typically `UTC`). `SET TIME ZONE` on a **client-side** connection does NOT propagate to the server's pool — every gRPC handler call uses a server-side connection whose TZ is unchanged. So a gRPC-level TZ test would silently pass under the wrong TZ (both INSERT and QUERY happen under the same UTC session). This unit test exercises the SQL directly via libpqxx (where SET actually takes effect on the connection), running the same query the handlers run.
 
-Append after the existing Daily tests:
+- [ ] **Step 1: Write the failing test**
 
 ```cpp
-TEST_F(DisplayServiceIT, GetDailyChargingReport_TzBoundary_MidnightRollsToNextDay) {
-  // Switch session TZ to Asia/Shanghai. Reset to UTC at end so other
-  // tests are unaffected.
-  auto pg = pg();
+// tests/unit/test_charging_report_tz.cc
+#include <gtest/gtest.h>
+#include <memory>
+#include <pqxx/pqxx>
+#include "fixtures/pg_container.h"
+#include "fixtures/shared_pg.h"
+
+namespace evgrpc::test {
+
+// RAII guard: SET TIME ZONE in ctor, RESET TIME ZONE in dtor.
+// Throws on pqxx errors during SET (test fails loudly); swallows
+// RESET errors (cleanup must not mask test failures via throwing
+// from a destructor).
+class ScopedSessionTimezone {
+ public:
+  ScopedSessionTimezone(pqxx::connection& c, const std::string& tz)
+      : c_(c) {
+    pqxx::work tx(c_);
+    tx.exec("SET TIME ZONE '" + tx.esc(tz) + "'");
+    tx.commit();
+  }
+  ~ScopedSessionTimezone() noexcept {
+    try {
+      pqxx::work tx(c_);
+      tx.exec("RESET TIME ZONE");
+      tx.commit();
+    } catch (...) { /* cleanup best-effort */ }
+  }
+  ScopedSessionTimezone(const ScopedSessionTimezone&) = delete;
+  ScopedSessionTimezone& operator=(const ScopedSessionTimezone&) = delete;
+ private:
+  pqxx::connection& c_;
+};
+
+class ChargingReportTzTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() { SharedPgEnvironment::SetUp(); }
+  static void TearDownTestSuite() { SharedPgEnvironment::TearDown(); }
+
+  void SetUp() override {
+    pg_ = SharedPgEnvironment::pg();
+    conn_ = std::make_shared<pqxx::connection>(pg_->Conninfo());
+  }
+  std::shared_ptr<PgContainer> pg_;
+  std::shared_ptr<pqxx::connection> conn_;
+};
+
+TEST_F(ChargingReportTzTest, Daily_AsiaShanghai_RollsToNextDay) {
+  // Insert at 2026-08-12T20:00:00Z = 2026-08-13T04:00:00+08:00.
+  // Under session TZ=Asia/Shanghai, the row is in the 2026-08-13 day,
+  // NOT 2026-08-12.
   {
-    pqxx::work set_tx(*pg->acquire());
-    set_tx.exec("SET TIME ZONE 'Asia/Shanghai'");
-    set_tx.commit();
+    pqxx::work tx(*conn_);
+    tx.exec("INSERT INTO vehicle (Id, Brand, CalibratedRange, "
+            "  BatteryCapacity, PurchaseDate, LicensePlate) VALUES "
+            "  ('00000000-0000-0000-0000-000000000001', 't', 0, 0, "
+            "   '2026-01-01', 'tz-plate-1')");
+    tx.exec("INSERT INTO source_category (Id, Name) VALUES "
+            "  ('00000000-0000-0000-0000-000000000010', 'grid')");
+    tx.exec_params(
+        "INSERT INTO charging (Id, VehicleId, StartTime, EndTime, "
+        "  StartPercent, EndPercent, StartMileage, EndMileage, "
+        "  KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, "
+        "  ChargerType, SourceCategoryId, Location, Remark) VALUES "
+        "  ($1, $2, '2026-08-12T20:00:00Z', '2026-08-12T21:00:00Z', "
+        "   0, 0, 0, 0, 0, 0, 0, NULL, 'fast', $3, NULL, NULL)",
+        "00000000-0000-0000-0000-0000000000a1",
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000010");
+    tx.commit();
   }
 
-  // Insert a charging event with StartTime = 2026-08-12T20:00:00Z (UTC),
-  // which is 2026-08-13T04:00:00+08:00 (Shanghai) — i.e. belongs to
-  // the 2026-08-13 Shanghai daily bucket.
-  auto chan = channel();
-  const auto vid = data::CreateVehicleId(chan);
-  const auto sid = data::CreateSourceCategoryId(chan);
-  auto req = data::MakeValidCreateChargingRequest(vid, sid);
-  {
-    auto* start = req.mutable_start_time();
-    start->set_seconds(1786420800);  // 2026-08-12T20:00:00Z
-    auto* end = req.mutable_end_time();
-    end->set_seconds(1786424400);    // +1h
-  }
-  Charging v; grpc::ClientContext c;
-  ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
-      &c, req, &v).ok());
+  ScopedSessionTimezone shanghai(*conn_, "Asia/Shanghai");
+  pqxx::nontransaction read(*conn_);
 
-  // Query: GetDailyChargingReport(2026, 8, 13) — Shanghai day — should include.
-  auto stub = DisplayService::NewStub(chan);
-  {
-    GetDailyChargingReportRequest dreq;
-    dreq.set_year(2026); dreq.set_month(8); dreq.set_day(13);
-    ChargingReport resp; grpc::ClientContext dctx;
-    ASSERT_TRUE(stub->GetDailyChargingReport(&dctx, dreq, &resp).ok());
-    EXPECT_EQ(resp.count(), 1);
-  }
-  // Query: GetDailyChargingReport(2026, 8, 12) — Shanghai day — should NOT include.
-  {
-    GetDailyChargingReportRequest dreq;
-    dreq.set_year(2026); dreq.set_month(8); dreq.set_day(12);
-    ChargingReport resp; grpc::ClientContext dctx;
-    ASSERT_TRUE(stub->GetDailyChargingReport(&dctx, dreq, &resp).ok());
-    EXPECT_EQ(resp.count(), 0);
-  }
+  // 2026-08-13 Shanghai — should include.
+  auto r1 = read.exec_params(
+      "SELECT COUNT(*)::INT FROM charging c "
+      "WHERE c.StartTime::date = make_date($1, $2, $3)",
+      2026, 8, 13);
+  EXPECT_EQ(r1[0][0].as<int>(), 1);
 
-  // Cleanup: reset session TZ.
-  {
-    pqxx::work reset_tx(*pg->acquire());
-    reset_tx.exec("RESET TIME ZONE");
-    reset_tx.commit();
-  }
+  // 2026-08-12 Shanghai — should NOT include (UTC instant is already
+  // 4 AM Aug 13 in Shanghai).
+  auto r2 = read.exec_params(
+      "SELECT COUNT(*)::INT FROM charging c "
+      "WHERE c.StartTime::date = make_date($1, $2, $3)",
+      2026, 8, 12);
+  EXPECT_EQ(r2[0][0].as<int>(), 0);
+
+  // 2026-08-11 Shanghai — sanity check, also 0.
+  auto r3 = read.exec_params(
+      "SELECT COUNT(*)::INT FROM charging c "
+      "WHERE c.StartTime::date = make_date($1, $2, $3)",
+      2026, 8, 11);
+  EXPECT_EQ(r3[0][0].as<int>(), 0);
 }
+
+TEST_F(ChargingReportTzTest, Monthly_AsiaShanghai_GroupsByLocalMonth) {
+  // Insert at 2026-07-31T20:00:00Z = 2026-08-01T04:00:00+08:00.
+  // Under Shanghai TZ, this is in 2026-08 (not 2026-07).
+  {
+    pqxx::work tx(*conn_);
+    tx.exec("INSERT INTO vehicle (Id, Brand, CalibratedRange, "
+            "  BatteryCapacity, PurchaseDate, LicensePlate) VALUES "
+            "  ('00000000-0000-0000-0000-000000000002', 't', 0, 0, "
+            "   '2026-01-01', 'tz-plate-2')");
+    tx.exec("INSERT INTO source_category (Id, Name) VALUES "
+            "  ('00000000-0000-0000-0000-000000000011', 'grid')");
+    tx.exec_params(
+        "INSERT INTO charging (Id, VehicleId, StartTime, EndTime, "
+        "  StartPercent, EndPercent, StartMileage, EndMileage, "
+        "  KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, "
+        "  ChargerType, SourceCategoryId, Location, Remark) VALUES "
+        "  ($1, $2, '2026-07-31T20:00:00Z', '2026-07-31T21:00:00Z', "
+        "   0, 0, 0, 0, 0, 0, 0, NULL, 'fast', $3, NULL, NULL)",
+        "00000000-0000-0000-0000-0000000000a2",
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000011");
+    tx.commit();
+  }
+
+  ScopedSessionTimezone shanghai(*conn_, "Asia/Shanghai");
+  pqxx::nontransaction read(*conn_);
+
+  auto r1 = read.exec_params(
+      "SELECT COUNT(*)::INT FROM charging c "
+      "WHERE EXTRACT(YEAR FROM c.StartTime) = $1 "
+      "  AND EXTRACT(MONTH FROM c.StartTime) = $2",
+      2026, 8);
+  EXPECT_EQ(r1[0][0].as<int>(), 1);
+
+  auto r2 = read.exec_params(
+      "SELECT COUNT(*)::INT FROM charging c "
+      "WHERE EXTRACT(YEAR FROM c.StartTime) = $1 "
+      "  AND EXTRACT(MONTH FROM c.StartTime) = $2",
+      2026, 7);
+  EXPECT_EQ(r2[0][0].as<int>(), 0);
+}
+
+}  // namespace evgrpc::test
 ```
 
-Note: the timestamp `1786420800` = `2026-08-12T20:00:00Z`. To verify:
-run `date -u -d @1786420800` should print `Wed Aug 12 20:00:00 UTC 2026`.
+- [ ] **Step 2: Wire into CMake**
 
-- [ ] **Step 2: Build and run the test**
+In `tests/CMakeLists.txt` `add_executable(evgrpc_tests ...)` source list, add:
+```cmake
+unit/test_charging_report_tz.cc
+```
 
-Run:
+- [ ] **Step 3: Build and run**
+
 ```bash
-cmake --build /data/Repositories/evGRpc/cmake-build-debug --target evgrpc_integration_tests -j4
-./cmake-build-debug/tests/integration/evgrpc_integration_tests \
-  --gtest_filter='DisplayServiceIT.GetDailyChargingReport_TzBoundary*'
+cmake --build /data/Repositories/evGRpc/cmake-build-debug --target evgrpc_tests -j4
+./cmake-build-debug/tests/evgrpc_tests --gtest_filter='ChargingReportTzTest.*'
 ```
-Expected: PASS.
+Expected: 2 tests PASS.
 
-If FAIL, the most likely cause is the timestamp literal — verify with
-`date -u -d @1786420800`. The expected UTC instant is
-2026-08-12T20:00:00Z, which is 2026-08-13T04:00:00+08:00 in Shanghai TZ.
+If FAIL, check:
+- Did `pg_->Conninfo()` return the right URL? The connection should succeed silently; if `pqxx::connection` constructor throws, the issue is the connection string (probably DATABASE_URL not set in test env, or config.json missing).
+- Did `SET TIME ZONE` actually take effect? Add a debug `EXPECT_EQ(read.exec("SHOW TIME ZONE")[0][0].as<std::string>(), "Asia/Shanghai");` before the assertions.
+
+- [ ] **Step 4: Commit**
+
+```bash
+cd /data/Repositories/evGRpc
+git add tests/unit/test_charging_report_tz.cc tests/CMakeLists.txt
+git commit -m "test: TZ-awareness SQL test for ChargingReport (direct libpqxx)
+
+Verifies that the DisplayService ChargingReport SQL is correctly
+TZ-aware at the SQL level. The spec assumes session-TZ-aware grouping
+via (c.StartTime::date) and EXTRACT on TIMESTAMPTZ.
+
+A gRPC IT for this would silently pass under the wrong TZ because
+TestServer's PgPool doesn't propagate client-side SET TIME ZONE.
+This unit test exercises the SQL directly via libpqxx (where SET
+actually takes effect on the connection), running the exact query
+the handlers run.
+
+Tests:
+- Daily_AsiaShanghai_RollsToNextDay — row at 2026-08-12T20:00:00Z
+  is in the 2026-08-13 Shanghai day, not 2026-08-12.
+- Monthly_AsiaShanghai_GroupsByLocalMonth — row at 2026-07-31T20:00Z
+  is in 2026-08 Shanghai (month boundary).
+
+Uses ScopedSessionTimezone RAII guard so RESET TIME ZONE runs even
+if an assertion fails. End-to-end TZ testing (server running under
+TZ env) is out of scope here — flagged as follow-up in spec §10."
+```
+
+> **Note on the rejected gRPC approach**: A previous draft of this task used a gRPC IT (TzBoundary test) that called SET TIME ZONE on a client connection, then made gRPC CreateCharging + GetDailyChargingReport calls, then RESET on the client connection. This was incorrect — TestServer's PgPool uses postmaster-side session TZ (typically UTC), and client-side SET does not propagate. The test would have silently passed under UTC regardless of the handler's TZ behavior. The direct-SQL unit test above is the corrected approach. End-to-end TZ coverage requires running the test binary under a TZ env var (a future spec).
 
 ### Task 4.2: Apr31 + Leap-year Feb29 tests
 
@@ -1291,15 +1413,39 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_Apr31_InvalidArgument) {
 }
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_LeapYear_Feb29_HappyPath) {
-  auto stub = DisplayService::NewStub(channel());
-  // 2024 is a leap year; Feb 29 is valid; no data → OK + zeros.
-  GetDailyChargingReportRequest req;
-  req.set_year(2024); req.set_month(2); req.set_day(29);
-  ChargingReport resp; grpc::ClientContext ctx;
-  ASSERT_TRUE(stub->GetDailyChargingReport(&ctx, req, &resp).ok());
-  EXPECT_EQ(resp.count(), 0);
+  // 2024 is a leap year; Feb 29 is valid. Insert a row on Feb 29, 2024
+  // and assert the daily report returns count=1 (not the trivial
+  // empty-result test from the v3 draft). Timestamp 1709184000 =
+  // 2024-02-29T00:00:00Z; verify with `date -u -d @1709184000`.
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.mutable_start_time()->set_seconds(1709184000);  // 2024-02-29T00:00:00Z
+  req.mutable_end_time()->set_seconds(1709187600);    // +1h
+  Charging v; grpc::ClientContext ic;
+  ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+      &ic, req, &v).ok());
+
+  auto stub = DisplayService::NewStub(chan);
+  GetDailyChargingReportRequest dreq;
+  dreq.set_year(2024); dreq.set_month(2); dreq.set_day(29);
+  dreq.set_vehicle_id(vid);
+  ChargingReport resp; grpc::ClientContext dctx;
+  ASSERT_TRUE(stub->GetDailyChargingReport(&dctx, dreq, &resp).ok());
+  EXPECT_EQ(resp.year(), 2024);
+  EXPECT_EQ(resp.month(), 2);
+  EXPECT_EQ(resp.day(), 29);
+  EXPECT_EQ(resp.count(), 1);  // row was inserted on Feb 29, 2024
+  EXPECT_GT(resp.total_kwh(), 0.0);
 }
 
+// Spec deviation: spec 2026-08-13-display-charging-reports-design.md
+// §9.2 enumerates LeapYear_Feb29_HappyPath but does NOT list this
+// NonLeapYear counterpart. We add it as a mirror of Apr31 — proves
+// day-vs-month-year validation correctly distinguishes "valid in
+// some years, invalid in this year" (e.g., Feb 29 OK in 2024 but
+// not in 2026).
 TEST_F(DisplayServiceIT, GetDailyChargingReport_NonLeapYear_Feb29_InvalidArgument) {
   auto stub = DisplayService::NewStub(channel());
   // 2026 is NOT a leap year; Feb 29 must be rejected.
@@ -1319,19 +1465,19 @@ cmake --build /data/Repositories/evGRpc/cmake-build-debug --target evgrpc_integr
 ./cmake-build-debug/tests/integration/evgrpc_integration_tests \
   --gtest_filter='DisplayServiceIT.Get*ChargingReport*'
 ```
-Expected: 19 tests PASS (16 from Chunks 2-3 + 3 new edge-case tests).
+Expected: 20 tests PASS (16 gRPC IT from Chunks 2-3 + 1 TZ-awareness unit test from Task 4.1 + 3 edge-case validator tests from Task 4.2).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cd /data/Repositories/evGRpc
 git add tests/integration/display_service_test.cc
-git commit -m "test(display): TZ-boundary + Apr31/Feb29/LeapYear edge cases
+git commit -m "test(display): Apr31 + LeapYear/NonLeapYear Feb29 edge cases
 
-TzBoundary inserts a charging event at 2026-08-12T20:00:00Z and asserts
-the Asia/Shanghai daily report for 2026-08-13 includes it (verifying
-session-TZ date grouping). Apr31/Feb29/non-leap-year tests guard the
-day-validity validator."
+Apr31/Feb29/non-leap-year tests guard the day-validity validator.
+LeapYear_Feb29_HappyPath strengthened to insert a row and assert
+count=1 (was trivial empty-result assertion in v3). NonLeapYear
+test is a spec-deviation complement to LeapYear (see §9.2)."
 ```
 
 ---
