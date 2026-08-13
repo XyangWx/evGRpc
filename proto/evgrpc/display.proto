@@ -109,6 +109,26 @@ message GetTemperatureConsumptionCorrelationRequest {
 }
 message GetTemperatureConsumptionCorrelationResponse { repeated TemperatureBucket buckets = 1; }
 
+// Charging-only report. Parallel to PeriodReport but reads only the
+// charging table (no consumption mix-in) and adds a charging-event
+// count. day=0 for annual/monthly; month=0 for annual.
+message ChargingReport {
+  int32 year = 1;
+  int32 month = 2;        // 0 = annual; 1-12 = monthly or daily
+  int32 day = 3;          // 0 = annual/monthly; 1-31 = daily
+  double total_cost = 4;
+  double total_kwh = 5;
+  int32 count = 6;
+  string vehicle_id = 7;  // empty = all vehicles
+}
+
+message GetDailyChargingReportRequest {
+  int32 year = 1;
+  int32 month = 2;
+  int32 day = 3;
+  string vehicle_id = 4;  // optional
+}
+
 service DisplayService {
   rpc GetVehicleCostSummary(GetVehicleCostSummaryRequest) returns (VehicleCostSummary);
   rpc GetMonthlyReport(GetMonthlyReportRequest) returns (PeriodReport);
@@ -118,4 +138,5 @@ service DisplayService {
   rpc GetConsumptionEfficiency(GetConsumptionEfficiencyRequest) returns (GetConsumptionEfficiencyResponse);
   rpc GetRangeAccuracy(GetRangeAccuracyRequest) returns (GetRangeAccuracyResponse);
   rpc GetTemperatureConsumptionCorrelation(GetTemperatureConsumptionCorrelationRequest) returns (GetTemperatureConsumptionCorrelationResponse);
+  rpc GetDailyChargingReport(GetDailyChargingReportRequest) returns (ChargingReport);
 }
