@@ -1554,11 +1554,11 @@ Run:
 bash scripts/run_all_tests.sh --no-coverage
 ```
 Expected: PASS on all three suites:
-- unit (evgrpc_tests): 99 + 5 (LastDayOfMonth ×3 + SchemaMigration ×2) = 104 tests
+- unit (evgrpc_tests): 99 + 7 (LastDayOfMonth ×3 + SchemaMigration ×2 + TZ-awareness ×2) = 106 tests
 - integration (evgrpc_integration_tests): 95 + 19 = 114 tests
 - e2e (evgrpc_e2e_tests): 2 tests (unchanged)
 
-Total: 220 tests, all PASS.
+Total: 222 tests, all PASS.
 
 If any FAIL, the most likely causes are:
 - A test forgot to reset session TZ (look for `SET TIME ZONE` without
@@ -1611,7 +1611,7 @@ cd /data/Repositories/evGRpc
 git log --oneline master..HEAD
 git status --short
 ```
-Expected: 5-6 commits ahead of master, working tree clean.
+Expected: 9 commits ahead of master (one per task commit step across Chunks 1-5), working tree clean.
 
 - [ ] **Step 2: Report to user**
 
@@ -1619,6 +1619,6 @@ Report:
 - Spec: docs/superpowers/specs/2026-08-13-display-charging-reports-design.md
 - Plan: docs/superpowers/plans/2026-08-13-display-charging-reports.md
 - Branch: feat/display-charging-reports
-- N commits, all tests green (220 total: 104 unit + 114 IT + 2 e2e)
+- N commits, all tests green (222 total: 106 unit + 114 IT + 2 e2e)
 
 User decides: merge to master, push, or open a PR.
