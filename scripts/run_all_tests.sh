@@ -64,10 +64,29 @@ run_suite() {
 
 # Ensure binaries are built.
 if (( DO_BUILD )); then
+  # Configure debug build dir if not already configured. First run takes
+  # ~30+ min (FetchContent rebuilds _deps); subsequent runs reuse the cache.
+  if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    echo ">>> Configuring $BUILD_DIR (first run, may take 30+ min)..."
+    cmake -G Ninja -S "$REPO_ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug \
+      > /tmp/evgrpc_build.log 2>&1 \
+      || { echo "configure failed; see /tmp/evgrpc_build.log"; exit 1; }
+  fi
+  if (( DO_COVERAGE )); then
+    if [[ ! -f "$COVERAGE_BUILD_DIR/CMakeCache.txt" ]] \
+       || ! grep -q "EVGRPC_COVERAGE:BOOL=ON" "$COVERAGE_BUILD_DIR/CMakeCache.txt" 2>/dev/null; then
+      echo ">>> Configuring $COVERAGE_BUILD_DIR with coverage (first run)..."
+      cmake -G Ninja -S "$REPO_ROOT" -B "$COVERAGE_BUILD_DIR" \
+        -DCMAKE_BUILD_TYPE=Debug -DEVGRPC_COVERAGE=ON \
+        >> /tmp/evgrpc_build.log 2>&1 \
+        || { echo "coverage configure failed; see /tmp/evgrpc_build.log"; exit 1; }
+    fi
+  fi
+
   echo ">>> Building binaries..."
   cmake --build "$BUILD_DIR" \
     --target evgrpc_tests evgrpc_integration_tests evgrpc_e2e_tests -j4 \
-    > /tmp/evgrpc_build.log 2>&1 \
+    >> /tmp/evgrpc_build.log 2>&1 \
     || { echo "build failed; see /tmp/evgrpc_build.log"; exit 1; }
   cmake --build "$BUILD_DIR" --target evgrpc_server -j4 \
     >> /tmp/evgrpc_build.log 2>&1 || true   # optional
@@ -80,6 +99,10 @@ if (( DO_BUILD )); then
 fi
 
 cd "$REPO_ROOT"
+
+# Centralized log directory (commit 19d2c6c). Tests throw if ./log/
+# is missing — create it before any suite runs.
+mkdir -p "$REPO_ROOT/log"
 
 # 1. Unit tests.
 run_suite "unit (evgrpc_tests, ~99 cases)" \
