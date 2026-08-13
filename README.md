@@ -102,13 +102,20 @@ Run:
 
 ```sh
 docker run --rm --network host \
-  -v $PWD/my-config.json:/etc/evgrpc/config.json:ro \
+  -v $PWD/config.json:/etc/evgrpc/config.json:ro \
+  -v evgrpc_logs:/app/log \
   evgrpc:dev
 ```
 
 The container reads its config from `/etc/evgrpc/config.json`. Mount
 your config file there (or use a Kubernetes ConfigMap). No env vars
 are required at startup in v2.
+
+`config.json` is the canonical name — it matches `src/util/args.h`'s
+default `config_path` so the server will also find it via CWD lookup
+if `--config` is omitted. `/app/log` is created in the image and
+declared as a `VOLUME`; the named volume `evgrpc_logs` (or any bind
+mount) keeps the rotating log files across container restarts.
 
 Notes:
 
@@ -199,7 +206,10 @@ is unreachable, the server fails fast at startup.
 ### Docker
 
 ```sh
-docker run -v $PWD/my-config.json:/etc/evgrpc/config.json:ro evgrpc:latest
+docker run \
+  -v $PWD/config.json:/etc/evgrpc/config.json:ro \
+  -v evgrpc_logs:/app/log \
+  evgrpc:latest
 ```
 
 ### Validation
