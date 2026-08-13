@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS source_category (
 CREATE TABLE IF NOT EXISTS charging (
   Id                    UUID PRIMARY KEY,
   VehicleId             UUID NOT NULL REFERENCES vehicle(Id),
-  StartTime             TIMESTAMP NOT NULL,
-  EndTime               TIMESTAMP NOT NULL,
+  StartTime             TIMESTAMPTZ NOT NULL,
+  EndTime               TIMESTAMPTZ NOT NULL,
   StartPercent          INT NOT NULL,
   EndPercent            INT NOT NULL,
   StartMileage          INT NOT NULL,

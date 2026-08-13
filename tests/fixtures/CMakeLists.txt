@@ -32,12 +32,21 @@ target_link_libraries(evgrpc_test_fixtures PUBLIC
   Threads::Threads
   gtest               # SharedPgEnvironment derives from ::testing::Environment
 )
-# Absolute path to sql/001_initial.sql, baked at compile time so
-# SharedPgEnvironment::SetUp doesn't depend on CWD (tests run from
-# cmake-build-debug/). Made PUBLIC so consumers of evgrpc_test_fixtures
-# see the same definition when they include shared_pg.h.
+# Combined schema loader: 001_initial.sql + 002_charging_timestamptz_migration.sql.
+# Concatenated at configure time so tests always apply both. Fresh
+# installs get TIMESTAMPTZ via 001; existing DBs get migrated by 002.
+file(READ "${CMAKE_SOURCE_DIR}/sql/001_initial.sql" _sql_001)
+file(READ "${CMAKE_SOURCE_DIR}/sql/002_charging_timestamptz_migration.sql" _sql_002)
+file(WRITE "${CMAKE_BINARY_DIR}/generated/test_schema.sql"
+     "${_sql_001}\n${_sql_002}\n")
+# PUBLIC (not PRIVATE) so consumers (evgrpc_tests, evgrpc_integration_tests)
+# see these definitions when compiling their own sources. The existing
+# line at tests/fixtures/CMakeLists.txt:39 also uses PUBLIC — keep
+# the visibility consistent so the migration path is visible to the
+# new unit-test file in evgrpc_tests.
 target_compile_definitions(evgrpc_test_fixtures PUBLIC
-  EVGRPC_TEST_SQL_PATH="${CMAKE_SOURCE_DIR}/sql/001_initial.sql"
+  EVGRPC_TEST_SQL_PATH="${CMAKE_BINARY_DIR}/generated/test_schema.sql"
+  EVGRPC_MIGRATION_002_PATH="${CMAKE_SOURCE_DIR}/sql/002_charging_timestamptz_migration.sql"
 )
 # Per-target coverage (see top-level CMakeLists.txt for why global fails).
 if(EVGRPC_COVERAGE)
