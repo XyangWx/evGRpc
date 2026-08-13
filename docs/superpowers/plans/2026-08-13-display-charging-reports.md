@@ -1388,7 +1388,9 @@ Tests:
 
 Uses ScopedSessionTimezone RAII guard so RESET TIME ZONE runs even
 if an assertion fails. End-to-end TZ testing (server running under
-TZ env) is out of scope here — flagged as follow-up in spec §10."
+TZ env) is out of scope here — a real follow-up but not yet recorded
+in spec §10 (consider adding to spec §10 follow-ups list when the
+end-to-end coverage spec lands).
 ```
 
 > **Note on the rejected gRPC approach**: A previous draft of this task used a gRPC IT (TzBoundary test) that called SET TIME ZONE on a client connection, then made gRPC CreateCharging + GetDailyChargingReport calls, then RESET on the client connection. This was incorrect — TestServer's PgPool uses postmaster-side session TZ (typically UTC), and client-side SET does not propagate. The test would have silently passed under UTC regardless of the handler's TZ behavior. The direct-SQL unit test above is the corrected approach. End-to-end TZ coverage requires running the test binary under a TZ env var (a future spec).
@@ -1442,10 +1444,11 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_LeapYear_Feb29_HappyPath) {
 
 // Spec deviation: spec 2026-08-13-display-charging-reports-design.md
 // §9.2 enumerates LeapYear_Feb29_HappyPath but does NOT list this
-// NonLeapYear counterpart. We add it as a mirror of Apr31 — proves
+// NonLeapYear counterpart. We add it as a mirror of LeapYear — proves
 // day-vs-month-year validation correctly distinguishes "valid in
 // some years, invalid in this year" (e.g., Feb 29 OK in 2024 but
-// not in 2026).
+// not in 2026). The Apr31-style test (in Task 4.2 above) covers the
+// simpler day-vs-month case; this one adds the year dimension.
 TEST_F(DisplayServiceIT, GetDailyChargingReport_NonLeapYear_Feb29_InvalidArgument) {
   auto stub = DisplayService::NewStub(channel());
   // 2026 is NOT a leap year; Feb 29 must be rejected.
@@ -1465,7 +1468,7 @@ cmake --build /data/Repositories/evGRpc/cmake-build-debug --target evgrpc_integr
 ./cmake-build-debug/tests/integration/evgrpc_integration_tests \
   --gtest_filter='DisplayServiceIT.Get*ChargingReport*'
 ```
-Expected: 20 tests PASS (16 gRPC IT from Chunks 2-3 + 1 TZ-awareness unit test from Task 4.1 + 3 edge-case validator tests from Task 4.2).
+Expected: 21 tests total — 19 gRPC IT (16 from Chunks 2-3 + 3 edge-case validator tests from Task 4.2) + 2 TZ-awareness unit tests from Task 4.1. The DisplayServiceIT gtest_filter below matches only the 19 gRPC IT; the 2 unit tests run separately via evgrpc_tests.
 
 - [ ] **Step 3: Commit**
 
