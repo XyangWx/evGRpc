@@ -525,21 +525,17 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_HappyPath_MultipleRows) {
   auto chan = channel();
   const auto vid = data::CreateVehicleId(chan);
   const auto sid = data::CreateSourceCategoryId(chan);
-  // 3 charging events on the same UTC day (default test TZ=UTC).
+  // data::MakeValidCreateChargingRequest uses a FIXED StartTime of
+  // 1700000000 = 2023-11-14 22:13:20 UTC (see tests/integration/
+  // test_data.cc:142). We query for that exact date so all 3 events
+  // land in the daily bucket.
   for (int i = 0; i < 3; ++i) {
     Charging v; grpc::ClientContext c;
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
   }
-  // All 3 events use now()-based StartTime from the helper; group them
-  // under today's UTC date.
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
   GetDailyChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
-  req.set_month(tm.tm_mon + 1);
-  req.set_day(tm.tm_mday);
+  req.set_year(2023); req.set_month(11); req.set_day(14);
   req.set_vehicle_id(vid);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetDailyChargingReport(
@@ -577,18 +573,16 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_VehicleFilter) {
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
   }
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
+  // All 4 events land on 2023-11-14 (helper fixed timestamp). Query
+  // with vehicle_id = A; should return only A's 2 rows.
   GetDailyChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
-  req.set_month(tm.tm_mon + 1);
-  req.set_day(tm.tm_mday);
+  req.set_year(2023); req.set_month(11); req.set_day(14);
   req.set_vehicle_id(vid_a);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetDailyChargingReport(
       &ctx, req, &resp).ok());
   EXPECT_EQ(resp.count(), 2);  // only A's rows
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
 }
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_YearBelow1900_InvalidArgument) {
@@ -611,11 +605,22 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_MonthOutOfRange_InvalidArgument)
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_DayOutOfRange_InvalidArgument) {
   auto stub = DisplayService::NewStub(channel());
-  GetDailyChargingReportRequest req;
-  req.set_year(2026); req.set_month(1); req.set_day(32);
-  ChargingReport resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  // day=0 — below lower bound (1..LastDayOfMonth).
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(1); req.set_day(0);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
+  // day=32 — above upper bound for January (31).
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(1); req.set_day(32);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
 }
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_Feb30_InvalidArgument) {
@@ -630,17 +635,7 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_Feb30_InvalidArgument) {
 
 (7 tests for the daily RPC; the LeapYear/Apr31/TzBoundary tests come in Chunk 4.)
 
-- [ ] **Step 2: Add the missing headers if not already included**
-
-Top of `tests/integration/display_service_test.cc` (after existing
-`#include` block), add:
-```cpp
-#include <chrono>
-#include <ctime>
-```
-Only if not already present.
-
-- [ ] **Step 3: Build and run the new tests (expect FAIL — handler not implemented)**
+- [ ] **Step 2: Build and run the new tests (expect FAIL — handler not implemented)**
 
 Run:
 ```bash
@@ -724,7 +719,11 @@ grpc::Status DisplayServiceImpl::GetDailyChargingReport(
       resp->set_total_kwh(row["total_kwh"].as<double>());
       resp->set_count(row["count"].as<int>());
     } else {
-      // Empty result — return zeros (no-data policy, see spec §2.5).
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. The non-empty branch always
+      // fires for valid SQL. Defensive fallback retained in case
+      // future SQL changes (e.g. dropping a COALESCE) introduce a
+      // truly-empty result set.
       resp->set_total_cost(0.0);
       resp->set_total_kwh(0.0);
       resp->set_count(0);
@@ -844,17 +843,15 @@ TEST_F(DisplayServiceIT, GetMonthlyChargingReport_HappyPath_MultipleRows) {
   auto chan = channel();
   const auto vid = data::CreateVehicleId(chan);
   const auto sid = data::CreateSourceCategoryId(chan);
+  // Helper fixed StartTime = 2023-11-14 (1700000000 epoch) — query
+  // for that exact month so all 3 events land in the monthly bucket.
   for (int i = 0; i < 3; ++i) {
     Charging v; grpc::ClientContext c;
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
   }
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
   GetMonthlyChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
-  req.set_month(tm.tm_mon + 1);
+  req.set_year(2023); req.set_month(11);
   req.set_vehicle_id(vid);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetMonthlyChargingReport(
@@ -882,6 +879,8 @@ TEST_F(DisplayServiceIT, GetMonthlyChargingReport_VehicleFilter) {
   const auto vid_a = data::CreateVehicleId(chan);
   const auto vid_b = data::CreateVehicleId(chan);
   const auto sid = data::CreateSourceCategoryId(chan);
+  // All 4 events land in 2023-11 (helper fixed). Query with
+  // vehicle_id = A; should return only A's 2 rows.
   for (int i = 0; i < 2; ++i) {
     Charging v; grpc::ClientContext c;
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
@@ -890,17 +889,14 @@ TEST_F(DisplayServiceIT, GetMonthlyChargingReport_VehicleFilter) {
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
   }
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
   GetMonthlyChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
-  req.set_month(tm.tm_mon + 1);
+  req.set_year(2023); req.set_month(11);
   req.set_vehicle_id(vid_a);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetMonthlyChargingReport(
       &ctx, req, &resp).ok());
   EXPECT_EQ(resp.count(), 2);
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
 }
 
 TEST_F(DisplayServiceIT, GetMonthlyChargingReport_YearBelow1900_InvalidArgument) {
@@ -925,16 +921,14 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_HappyPath_MultipleRows) {
   auto chan = channel();
   const auto vid = data::CreateVehicleId(chan);
   const auto sid = data::CreateSourceCategoryId(chan);
+  // Helper fixed StartTime = 2023-11-14 — query for that year.
   for (int i = 0; i < 3; ++i) {
     Charging v; grpc::ClientContext c;
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
   }
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
   GetAnnualChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
+  req.set_year(2023);
   req.set_vehicle_id(vid);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetAnnualChargingReport(
@@ -959,6 +953,7 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_VehicleFilter) {
   const auto vid_a = data::CreateVehicleId(chan);
   const auto vid_b = data::CreateVehicleId(chan);
   const auto sid = data::CreateSourceCategoryId(chan);
+  // All 4 events in 2023 (helper fixed). Query with vehicle_id = A.
   for (int i = 0; i < 2; ++i) {
     Charging v; grpc::ClientContext c;
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
@@ -967,16 +962,14 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_VehicleFilter) {
     ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
         &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
   }
-  auto now = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{}; gmtime_r(&t, &tm);
   GetAnnualChargingReportRequest req;
-  req.set_year(tm.tm_year + 1900);
+  req.set_year(2023);
   req.set_vehicle_id(vid_a);
   ChargingReport resp; grpc::ClientContext ctx;
   ASSERT_TRUE(DisplayService::NewStub(chan)->GetAnnualChargingReport(
       &ctx, req, &resp).ok());
   EXPECT_EQ(resp.count(), 2);
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
 }
 
 TEST_F(DisplayServiceIT, GetAnnualChargingReport_YearBelow1900_InvalidArgument) {
@@ -1067,6 +1060,10 @@ grpc::Status DisplayServiceImpl::GetMonthlyChargingReport(
       resp->set_total_kwh(row["total_kwh"].as<double>());
       resp->set_count(row["count"].as<int>());
     } else {
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. Defensive fallback retained
+      // in case future SQL changes (e.g. dropping a COALESCE)
+      // introduce a truly-empty result set.
       resp->set_total_cost(0.0);
       resp->set_total_kwh(0.0);
       resp->set_count(0);
@@ -1136,6 +1133,10 @@ grpc::Status DisplayServiceImpl::GetAnnualChargingReport(
       resp->set_total_kwh(row["total_kwh"].as<double>());
       resp->set_count(row["count"].as<int>());
     } else {
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. Defensive fallback retained
+      // in case future SQL changes (e.g. dropping a COALESCE)
+      // introduce a truly-empty result set.
       resp->set_total_cost(0.0);
       resp->set_total_kwh(0.0);
       resp->set_count(0);
