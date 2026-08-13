@@ -707,11 +707,22 @@ TEST_F(DisplayServiceIT, GetDailyChargingReport_YearBelow1900_InvalidArgument) {
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_MonthOutOfRange_InvalidArgument) {
   auto stub = DisplayService::NewStub(channel());
-  GetDailyChargingReportRequest req;
-  req.set_year(2026); req.set_month(13); req.set_day(1);
-  ChargingReport resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  // month=0 — below lower bound (1..12).
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(0); req.set_day(1);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
+  // month=13 — above upper bound.
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(13); req.set_day(1);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
 }
 
 TEST_F(DisplayServiceIT, GetDailyChargingReport_DayOutOfRange_InvalidArgument) {
@@ -814,11 +825,22 @@ TEST_F(DisplayServiceIT, GetMonthlyChargingReport_YearBelow1900_InvalidArgument)
 
 TEST_F(DisplayServiceIT, GetMonthlyChargingReport_MonthOutOfRange_InvalidArgument) {
   auto stub = DisplayService::NewStub(channel());
-  GetMonthlyChargingReportRequest req;
-  req.set_year(2026); req.set_month(13);
-  ChargingReport resp; grpc::ClientContext ctx;
-  grpc::Status st = stub->GetMonthlyChargingReport(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  // month=0 — below lower bound (1..12).
+  {
+    GetMonthlyChargingReportRequest req;
+    req.set_year(2026); req.set_month(0);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetMonthlyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
+  // month=13 — above upper bound.
+  {
+    GetMonthlyChargingReportRequest req;
+    req.set_year(2026); req.set_month(13);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetMonthlyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
 }
 
 TEST_F(DisplayServiceIT, GetAnnualChargingReport_HappyPath_MultipleRows) {
