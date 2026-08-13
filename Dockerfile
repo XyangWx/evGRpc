@@ -16,8 +16,16 @@
 #
 # Run (v2: config.json only — no env vars required at startup):
 #   docker run --rm \
-#     -v $PWD/my-config.json:/etc/evgrpc/config.json:ro \
+#     -v $PWD/config.json:/etc/evgrpc/config.json:ro \
+#     -v evgrpc_logs:/app/log \
 #     -p 50051:50051 evgrpc:dev
+#
+# `config.json` is the canonical name (matches src/util/args.h default
+# config_path and the server's CWD lookup if --config is omitted).
+# `evgrpc_logs` is an anonymous volume that backs /app/log so rotating
+# log files persist across container restarts; the image already
+# creates /app/log so a config with `"log.file": "./log/evgrpc.log"`
+# works without further setup.
 
 # =====================================================================
 # Stage 1: builder
@@ -162,10 +170,19 @@ COPY --from=builder /src/build/src/evgrpc_server /app/evgrpc_server
 
 # Default config path (see src/util/args.{h,cc}). Operators MUST mount
 # a real config.json here, e.g.:
-#   docker run -v $PWD/my-config.json:/etc/evgrpc/config.json:ro …
+#   docker run -v $PWD/config.json:/etc/evgrpc/config.json:ro …
 # No env vars are read at startup in v2 — all configuration is in
 # config.json.
-RUN mkdir -p /etc/evgrpc
+#
+# /app/log is created unconditionally because the repo-root config.json
+# convention (commit 19d2c6c — centralize all logs to repo-root ./log/)
+# sets log.file="./log/evgrpc.log", resolved against WORKDIR=/app.
+# Without this dir, config_loader throws "log.file: parent directory
+# does not exist or is not writable" at startup. Declared as VOLUME
+# so rotating log files persist across container restarts; mount a
+# named volume or bind mount in production to collect logs.
+RUN mkdir -p /etc/evgrpc /app/log
+VOLUME ["/app/log"]
 EXPOSE 50051
 
 ENTRYPOINT ["/app/evgrpc_server"]
