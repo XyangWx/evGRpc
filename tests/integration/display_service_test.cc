@@ -887,4 +887,58 @@ TEST_F(DisplayServiceIT, GetAnnualChargingReport_YearBelow1900_InvalidArgument) 
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+TEST_F(DisplayServiceIT, GetDailyChargingReport_Apr31_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetDailyChargingReportRequest req;
+  req.set_year(2026); req.set_month(4); req.set_day(31);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_LeapYear_Feb29_HappyPath) {
+  // 2024 is a leap year; Feb 29 is valid. Insert a row on Feb 29, 2024
+  // and assert the daily report returns count=1 (not the trivial
+  // empty-result test from the v3 draft). Timestamp 1709184000 =
+  // 2024-02-29T00:00:00Z; verify with `date -u -d @1709184000`.
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.mutable_start_time()->set_seconds(1709184000);  // 2024-02-29T00:00:00Z
+  req.mutable_end_time()->set_seconds(1709187600);    // +1h
+  Charging v; grpc::ClientContext ic;
+  ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+      &ic, req, &v).ok());
+
+  auto stub = DisplayService::NewStub(chan);
+  GetDailyChargingReportRequest dreq;
+  dreq.set_year(2024); dreq.set_month(2); dreq.set_day(29);
+  dreq.set_vehicle_id(vid);
+  ChargingReport resp; grpc::ClientContext dctx;
+  ASSERT_TRUE(stub->GetDailyChargingReport(&dctx, dreq, &resp).ok());
+  EXPECT_EQ(resp.year(), 2024);
+  EXPECT_EQ(resp.month(), 2);
+  EXPECT_EQ(resp.day(), 29);
+  EXPECT_EQ(resp.count(), 1);  // row was inserted on Feb 29, 2024
+  EXPECT_GT(resp.total_kwh(), 0.0);
+}
+
+// Spec deviation: spec 2026-08-13-display-charging-reports-design.md
+// §9.2 enumerates LeapYear_Feb29_HappyPath but does NOT list this
+// NonLeapYear counterpart. We add it as a mirror of LeapYear — proves
+// day-vs-month-year validation correctly distinguishes "valid in
+// some years, invalid in this year" (e.g., Feb 29 OK in 2024 but
+// not in 2026). The Apr31-style test (in Task 4.2 above) covers the
+// simpler day-vs-month case; this one adds the year dimension.
+TEST_F(DisplayServiceIT, GetDailyChargingReport_NonLeapYear_Feb29_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  // 2026 is NOT a leap year; Feb 29 must be rejected.
+  GetDailyChargingReportRequest req;
+  req.set_year(2026); req.set_month(2); req.set_day(29);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
 }  // namespace evgrpc::test
