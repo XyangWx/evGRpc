@@ -129,6 +129,17 @@ message GetDailyChargingReportRequest {
   string vehicle_id = 4;  // optional
 }
 
+message GetMonthlyChargingReportRequest {
+  int32 year = 1;
+  int32 month = 2;
+  string vehicle_id = 3;  // optional
+}
+
+message GetAnnualChargingReportRequest {
+  int32 year = 1;
+  string vehicle_id = 2;  // optional
+}
+
 service DisplayService {
   rpc GetVehicleCostSummary(GetVehicleCostSummaryRequest) returns (VehicleCostSummary);
   rpc GetMonthlyReport(GetMonthlyReportRequest) returns (PeriodReport);
@@ -139,4 +150,6 @@ service DisplayService {
   rpc GetRangeAccuracy(GetRangeAccuracyRequest) returns (GetRangeAccuracyResponse);
   rpc GetTemperatureConsumptionCorrelation(GetTemperatureConsumptionCorrelationRequest) returns (GetTemperatureConsumptionCorrelationResponse);
   rpc GetDailyChargingReport(GetDailyChargingReportRequest) returns (ChargingReport);
+  rpc GetMonthlyChargingReport(GetMonthlyChargingReportRequest) returns (ChargingReport);
+  rpc GetAnnualChargingReport(GetAnnualChargingReportRequest) returns (ChargingReport);
 }
