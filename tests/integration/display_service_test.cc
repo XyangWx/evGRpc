@@ -18,6 +18,8 @@
 
 #include <string>
 
+#include "evgrpc/charging.grpc.pb.h"
+#include "evgrpc/charging.pb.h"
 #include "evgrpc/display.grpc.pb.h"
 #include "evgrpc/display.pb.h"
 #include "tests/integration/service_test_fixtures.h"
@@ -625,6 +627,119 @@ TEST_F(DisplayServiceIT, GetAnnualReport_InvalidYear_InvalidArgument) {
   PeriodReport resp;
   grpc::ClientContext ctx;
   grpc::Status st = stub->GetAnnualReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+// === ChargingReport RPCs (spec 2026-08-13-display-charging-reports) ===
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_HappyPath_MultipleRows) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  // data::MakeValidCreateChargingRequest uses a FIXED StartTime of
+  // 1700000000 = 2023-11-14 22:13:20 UTC (see tests/integration/
+  // test_data.cc:142). We query for that exact date so all 3 events
+  // land in the daily bucket.
+  for (int i = 0; i < 3; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid, sid), &v).ok());
+  }
+  GetDailyChargingReportRequest req;
+  req.set_year(2023); req.set_month(11); req.set_day(14);
+  req.set_vehicle_id(vid);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetDailyChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.year(), req.year());
+  EXPECT_EQ(resp.month(), req.month());
+  EXPECT_EQ(resp.day(), req.day());
+  EXPECT_EQ(resp.count(), 3);
+  EXPECT_EQ(resp.vehicle_id(), vid);
+  EXPECT_GT(resp.total_kwh(), 0.0);
+  EXPECT_GT(resp.total_cost(), 0.0);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_Empty) {
+  auto stub = DisplayService::NewStub(channel());
+  GetDailyChargingReportRequest req;
+  req.set_year(2026); req.set_month(8); req.set_day(13);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(stub->GetDailyChargingReport(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.total_cost(), 0.0);
+  EXPECT_EQ(resp.total_kwh(), 0.0);
+  EXPECT_EQ(resp.count(), 0);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_VehicleFilter) {
+  auto chan = channel();
+  const auto vid_a = data::CreateVehicleId(chan);
+  const auto vid_b = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  for (int i = 0; i < 2; ++i) {
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c, data::MakeValidCreateChargingRequest(vid_a, sid), &v).ok());
+    Charging v2; grpc::ClientContext c2;
+    ASSERT_TRUE(ChargingService::NewStub(chan)->CreateCharging(
+        &c2, data::MakeValidCreateChargingRequest(vid_b, sid), &v2).ok());
+  }
+  // All 4 events land on 2023-11-14 (helper fixed timestamp). Query
+  // with vehicle_id = A; should return only A's 2 rows.
+  GetDailyChargingReportRequest req;
+  req.set_year(2023); req.set_month(11); req.set_day(14);
+  req.set_vehicle_id(vid_a);
+  ChargingReport resp; grpc::ClientContext ctx;
+  ASSERT_TRUE(DisplayService::NewStub(chan)->GetDailyChargingReport(
+      &ctx, req, &resp).ok());
+  EXPECT_EQ(resp.count(), 2);  // only A's rows
+  EXPECT_EQ(resp.vehicle_id(), vid_a);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_YearBelow1900_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetDailyChargingReportRequest req;
+  req.set_year(1899); req.set_month(1); req.set_day(1);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_MonthOutOfRange_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetDailyChargingReportRequest req;
+  req.set_year(2026); req.set_month(13); req.set_day(1);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_DayOutOfRange_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  // day=0 — below lower bound (1..LastDayOfMonth).
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(1); req.set_day(0);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
+  // day=32 — above upper bound for January (31).
+  {
+    GetDailyChargingReportRequest req;
+    req.set_year(2026); req.set_month(1); req.set_day(32);
+    ChargingReport resp; grpc::ClientContext ctx;
+    grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
+    EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  }
+}
+
+TEST_F(DisplayServiceIT, GetDailyChargingReport_Feb30_InvalidArgument) {
+  auto stub = DisplayService::NewStub(channel());
+  GetDailyChargingReportRequest req;
+  req.set_year(2026); req.set_month(2); req.set_day(30);
+  ChargingReport resp; grpc::ClientContext ctx;
+  grpc::Status st = stub->GetDailyChargingReport(&ctx, req, &resp);
   EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 

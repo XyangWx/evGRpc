@@ -47,6 +47,10 @@ class DisplayServiceImpl final : public DisplayService::Service {
       grpc::ServerContext*,
       const GetTemperatureConsumptionCorrelationRequest*,
       GetTemperatureConsumptionCorrelationResponse*) override;
+  grpc::Status GetDailyChargingReport(
+      grpc::ServerContext* ctx,
+      const GetDailyChargingReportRequest* req,
+      ChargingReport* resp) override;
 
  private:
   PgPool* pool_;

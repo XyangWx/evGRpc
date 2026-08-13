@@ -8,6 +8,7 @@
 #include "db/error.h"
 #include "db/exec.h"
 #include "services/charger/charger_type.h"
+#include "util/last_day_of_month.h"
 #include "util/rpc_scope.h"
 
 namespace evgrpc {
@@ -630,6 +631,75 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
     auto s = ToGrpcStatus(e);
     evgrpc::log::Get("db")->warn(
         "method=GetTemperatureConsumptionCorrelation reason={}", e.what());
+    scope.set_status(s);
+    return s;
+  }
+}
+
+grpc::Status DisplayServiceImpl::GetDailyChargingReport(
+    grpc::ServerContext* ctx, const GetDailyChargingReportRequest* req,
+    ChargingReport* resp) {
+  static constexpr const char* kMethod =
+      "/evgrpc.DisplayService/GetDailyChargingReport";
+  const auto a = AuthenticateRpc(ctx, *validator_, kMethod);
+  RpcScope scope(kMethod, ctx->client_metadata(), a.subject, a.req_id);
+  if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
+
+  // Validator: year >= 1900, month 1..=12, day 1..=last-day-of-(year, month).
+  if (req->year() < 1900) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "year must be >= 1900");
+    scope.set_status(s); return s;
+  }
+  if (req->month() < 1 || req->month() > 12) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "month must be 1..12");
+    scope.set_status(s); return s;
+  }
+  const int last_day = LastDayOfMonth(req->year(), req->month());
+  if (req->day() < 1 || req->day() > last_day) {
+    auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "day out of range for given year/month");
+    scope.set_status(s); return s;
+  }
+
+  try {
+    auto conn = pool_->acquire();
+    pqxx::nontransaction tx(*conn);
+    pqxx::params p;
+    p.append(req->year()); p.append(req->month()); p.append(req->day());
+    p.append(req->vehicle_id());
+    const std::string sql =
+        "SELECT "
+        "  COALESCE(SUM(c.Cost), 0)::DOUBLE PRECISION AS total_cost, "
+        "  COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh, "
+        "  COUNT(*)::INT AS count "
+        "FROM charging c "
+        "WHERE c.StartTime::date = make_date($1, $2, $3) "
+        "  AND (length($4) = 0 OR c.VehicleId::text = $4)";
+    auto result = db::Exec(tx, sql, "DisplayService.GetDailyChargingReport", p);
+    resp->set_year(req->year());
+    resp->set_month(req->month());
+    resp->set_day(req->day());
+    if (!req->vehicle_id().empty()) resp->set_vehicle_id(req->vehicle_id());
+    if (!result.empty()) {
+      const auto& row = result[0];
+      resp->set_total_cost(row["total_cost"].as<double>());
+      resp->set_total_kwh(row["total_kwh"].as<double>());
+      resp->set_count(row["count"].as<int>());
+    } else {
+      // Unreachable: COALESCE(SUM, 0) guarantees a row even when
+      // no rows match the WHERE clause. The non-empty branch always
+      // fires for valid SQL. Defensive fallback retained in case
+      // future SQL changes (e.g. dropping a COALESCE) introduce a
+      // truly-empty result set.
+      resp->set_total_cost(0.0);
+      resp->set_total_kwh(0.0);
+      resp->set_count(0);
+    }
+    return grpc::Status::OK;
+  } catch (const std::exception& e) {
+    auto s = ToGrpcStatus(e);
     scope.set_status(s);
     return s;
   }
