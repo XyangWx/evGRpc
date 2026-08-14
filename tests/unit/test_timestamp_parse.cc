@@ -90,4 +90,19 @@ TEST(ParseTimestampTest, SingleDigitOffsetFails) {
   EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20+8"), -1L);
 }
 
+TEST(ParseTimestampTest, ExcessiveHourOffsetFails) {
+  // +25 exceeds the real-world UTC offset range (±14:00).
+  EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20+25"), -1L);
+}
+
+TEST(ParseTimestampTest, ExcessiveMinuteOffsetFails) {
+  EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20+14:60"), -1L);
+}
+
+TEST(ParseTimestampTest, MaxValidOffsetParses) {
+  // +14:00 is the largest real-world offset (Line Islands); 22:13:20+14:00
+  // == 08:13:20 UTC.
+  EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20+14:00"), 1699949600L);
+}
+
 }  // namespace evgrpc

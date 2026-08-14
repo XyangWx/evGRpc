@@ -43,6 +43,7 @@ bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
                tz[2] >= '0' && tz[2] <= '9') {
       const int sign = (tz[0] == '-') ? -1 : 1;
       const int hh = (tz[1] - '0') * 10 + (tz[2] - '0');
+      if (hh > 14) return false;  // real-world UTC offsets are within ±14:00
       int mm = 0;
       if (tz.size() == 6) {
         if (tz[3] != ':' || tz[4] < '0' || tz[4] > '9' ||
@@ -50,6 +51,7 @@ bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
           return false;
         }
         mm = (tz[4] - '0') * 10 + (tz[5] - '0');
+        if (mm > 59) return false;
       }
       offset_sec = sign * (hh * 3600 + mm * 60);
     } else {
@@ -65,9 +67,10 @@ bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
   // Reject trailing garbage (e.g. an offset we failed to split).
   if (iss.peek() != std::istringstream::traits_type::eof()) return false;
 
-  // 4. timegm interprets `tm` as UTC (POSIX/glibc; mktime would apply
-  //    the process-local TZ). Subtract the east-of-UTC offset to recover
-  //    the actual instant: "22:13:20+08" is 14:13:20 UTC.
+  // 4. timegm interprets `tm` as UTC (POSIX/glibc/BSD; mktime would
+  //    apply the process-local TZ). Linux target only — use _mkgmtime
+  //    if MSVC support is ever needed. Subtract the east-of-UTC offset
+  //    to recover the actual instant: "22:13:20+08" is 14:13:20 UTC.
   out->set_seconds(timegm(&tm) - offset_sec);
   out->set_nanos(0);
   return true;
