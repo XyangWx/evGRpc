@@ -37,13 +37,17 @@ cmake --build build --target evgrpc_tests evgrpc_e2e_tests
 EVGRPC_TEST_DB_PASSWORD=… ./build/tests/integration/evgrpc_e2e_tests
 ```
 
-- ~76 unit tests cover config loader, args, OIDC discovery, log init,
+- 107 unit tests cover config loader, args, OIDC discovery, log init,
   JWT validation, JWKS caching, all 6 service layers, DB pool,
-  ID generation, db::Exec wrapper.
-- 1 e2e test (`E2ESmoke.CreateThenListVehicle`) brings up an in-process
-  gRPC server + JWKS IdP + shared local PG and walks CreateVehicle →
-  ListVehicles.
-- The e2e test truncates `vehicle ... CASCADE` at the start, so it's
+  ID generation, db::Exec wrapper, and the charging-report helpers
+  (LastDayOfMonth, schema migration, TZ-aware grouping).
+- 114 integration tests exercise all 6 services against a shared local
+  PG, including the 3 charging-report RPCs (see
+  [Charging Reports](#charging-reports-displayservice) below).
+- 2 e2e tests (`E2ESmoke.CreateThenListVehicle`,
+  `E2ESmokeNoAuth.CreateVehicleWithoutToken`) bring up an in-process
+  gRPC server + JWKS IdP + shared local PG.
+- The e2e tests truncate `vehicle ... CASCADE` at the start, so they're
   re-runnable without manual cleanup.
 
 ## Coverage
@@ -154,6 +158,49 @@ returns all rows; both calls succeed).
 Requires: `docker`, `python3` with `PyJWT` + `cryptography`, `openssl`,
 and `grpcurl` (the script auto-falls-back to `~/.local/bin/grpcurl` or
 whatever `GRPCURL=$PWD/grpcurl` points at).
+
+## Charging Reports (DisplayService)
+
+Three RPCs report charging-only aggregates over calendar periods. They
+read the `charging` table only (no consumption mix-in), group by
+calendar day/month/year in the session time zone, and return a zeroed
+report (not an error) when no rows match.
+
+| RPC | Request fields | Returns |
+|-----|----------------|---------|
+| `GetDailyChargingReport` | `year`, `month`, `day`, `vehicle_id?` | `ChargingReport` |
+| `GetMonthlyChargingReport` | `year`, `month`, `vehicle_id?` | `ChargingReport` |
+| `GetAnnualChargingReport` | `year`, `vehicle_id?` | `ChargingReport` |
+
+`ChargingReport`:
+
+| Field | Meaning |
+|-------|---------|
+| `year` | calendar year |
+| `month` | `0` = annual; `1-12` = monthly/daily |
+| `day` | `0` = annual/monthly; `1-31` = daily |
+| `total_cost` | summed cost |
+| `total_kwh` | summed energy |
+| `count` | number of charging events |
+| `vehicle_id` | empty = all vehicles |
+
+Validation (all failures return `INVALID_ARGUMENT`):
+
+- `year < 1900`
+- `month` outside `1..12`
+- `day` outside `1..LastDayOfMonth(year, month)` — so Feb 30, Apr 31,
+  and Feb 29 in a non-leap year are all rejected.
+
+Time-zone convention: day/month/year boundaries are computed with
+`c.StartTime::date = make_date(...)` and `EXTRACT(YEAR/MONTH FROM
+c.StartTime)` on the `TIMESTAMPTZ` columns. The session time zone comes
+from the PostgreSQL postmaster — set `TZ` on the server process (or
+`timezone` in `postgresql.conf`). A libpq-client `SET TIME ZONE` does
+**not** affect these reports, because server-side pooled connections
+use the postmaster's time zone. The `charging.StartTime`/`EndTime`
+columns must be `TIMESTAMPTZ` (migrated by
+`sql/002_charging_timestamptz_migration.sql`); bare `TIMESTAMP` would
+store values relative to the INSERT-time session time zone.
 
 ## Configuration
 
