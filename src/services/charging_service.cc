@@ -161,7 +161,7 @@ grpc::Status ChargingServiceImpl::CreateCharging(
         "StartPercent, EndPercent, StartMileage, EndMileage, "
         "KwhCharged, Cost, ElectricityUnitPrice, ServiceFee, ChargerType, "
         "SourceCategoryId, Location, Remark) VALUES "
-        "($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, "
+        "($1, $2, $3, $4, $5, $6, $7, $8, $9, "
         "$10, $11, $12, $13::charger_type_enum, $14, $15, $16)",
         "ChargingService.CreateCharging",
         params);
@@ -279,8 +279,8 @@ grpc::Status ChargingServiceImpl::UpdateCharging(
     if (req->remark().empty())   p.append(nullptr); else p.append(req->remark());
     p.append(req->id());
     auto result = db::Exec(tx,
-        "UPDATE charging SET VehicleId=$1, StartTime=$2::timestamptz, "
-        "EndTime=$3::timestamptz, StartPercent=$4, EndPercent=$5, "
+        "UPDATE charging SET VehicleId=$1, StartTime=$2, "
+        "EndTime=$3, StartPercent=$4, EndPercent=$5, "
         "StartMileage=$6, EndMileage=$7, KwhCharged=$8, Cost=$9, "
         "ElectricityUnitPrice=$10, ServiceFee=$11, "
         "ChargerType=$12::charger_type_enum, SourceCategoryId=$13, "
@@ -359,13 +359,11 @@ grpc::Status ChargingServiceImpl::ListChargings(
       p.append(req->vehicle_id());
     }
     if (req->has_start_after()) {
-      sql += " AND StartTime > $" + std::to_string(p.size() + 1) +
-             "::timestamptz";
+      sql += " AND StartTime > $" + std::to_string(p.size() + 1);
       p.append(TimestampString(req->start_after()));
     }
     if (req->has_start_before()) {
-      sql += " AND StartTime < $" + std::to_string(p.size() + 1) +
-             "::timestamptz";
+      sql += " AND StartTime < $" + std::to_string(p.size() + 1);
       p.append(TimestampString(req->start_before()));
     }
     if (req->charger_type() != ChargerType::CHARGER_TYPE_UNSPECIFIED) {

@@ -426,4 +426,54 @@ TEST_F(ChargingServiceIT, ListChargings_Pagination) {
   EXPECT_EQ(resp2.chargings_size(), 2);
 }
 
+// Follow-up (spec §10.3): ListChargings start_after / start_before
+// range filter. Mints 3 chargings at t0, t0+1h, t0+2h (UTC), then
+// asserts the exclusive filters select the right subset.
+TEST_F(ChargingServiceIT, ListChargings_StartAfterStartBefore_RangeFilter) {
+  auto chan = channel();
+  const auto vid = data::CreateVehicleId(chan);
+  const auto sid = data::CreateSourceCategoryId(chan);
+  auto stub = ChargingService::NewStub(chan);
+
+  const long t0 = 1700000000;
+  for (int i = 0; i < 3; ++i) {
+    auto req = data::MakeValidCreateChargingRequest(vid, sid);
+    req.mutable_start_time()->set_seconds(t0 + i * 3600);
+    req.mutable_end_time()->set_seconds(t0 + i * 3600 + 1800);
+    Charging v; grpc::ClientContext c;
+    ASSERT_TRUE(stub->CreateCharging(&c, req, &v).ok());
+  }
+
+  // start_after = t0+1h (exclusive) → only the t0+2h row remains.
+  {
+    ListChargingsRequest req;
+    req.mutable_start_after()->set_seconds(t0 + 3600);
+    ListChargingsResponse resp; grpc::ClientContext ctx;
+    ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+    ASSERT_EQ(resp.chargings_size(), 1);
+    EXPECT_EQ(resp.chargings(0).start_time().seconds(), t0 + 7200);
+  }
+
+  // start_before = t0+1h (exclusive) → only the t0 row remains.
+  {
+    ListChargingsRequest req;
+    req.mutable_start_before()->set_seconds(t0 + 3600);
+    ListChargingsResponse resp; grpc::ClientContext ctx;
+    ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+    ASSERT_EQ(resp.chargings_size(), 1);
+    EXPECT_EQ(resp.chargings(0).start_time().seconds(), t0);
+  }
+
+  // start_after = t0, start_before = t0+2h → only the middle row.
+  {
+    ListChargingsRequest req;
+    req.mutable_start_after()->set_seconds(t0);
+    req.mutable_start_before()->set_seconds(t0 + 7200);
+    ListChargingsResponse resp; grpc::ClientContext ctx;
+    ASSERT_TRUE(stub->ListChargings(&ctx, req, &resp).ok());
+    ASSERT_EQ(resp.chargings_size(), 1);
+    EXPECT_EQ(resp.chargings(0).start_time().seconds(), t0 + 3600);
+  }
+}
+
 }  // namespace evgrpc::test
