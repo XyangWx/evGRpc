@@ -12,6 +12,7 @@
 #include "log/log.h"
 #include "services/charger/charger_type.h"
 #include "util/rpc_scope.h"
+#include "util/timestamp_parse.h"
 #include "util/uuid.h"
 
 namespace evgrpc {
@@ -22,50 +23,6 @@ namespace {
 std::string TimestampString(const google::protobuf::Timestamp& ts) {
   return google::protobuf::util::TimeUtil::ToString(ts);
 }
-
-// SQL -> proto. PostgreSQL TIMESTAMP columns return ISO 8601 strings
-// like "2023-11-14 22:13:20.000000+00" (microseconds + tz offset).
-// google::protobuf::util::TimeUtil::FromString only accepts the
-// RFC 3339 form ("2023-11-14T22:13:20Z") and silently returns false
-// on the PG default. Parse via std::tm + timegm (POSIX, treats input
-// as UTC) — accurate to second precision, sufficient for the
-// integration tests (proto Timestamp carries seconds + nanos).
-//
-// Returns true on success, false if the string is empty or doesn't
-// match the expected PG TIMESTAMP format.
-bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
-  if (s.empty()) return false;
-  // Strip fractional seconds + timezone offset from PG output:
-  //   "2023-11-14 22:13:20.000000+00"   <- default (microseconds + offset)
-  //   "2023-11-14 22:13:20+05:30"       <- offset only
-  //   "2023-11-14 22:13:20"            <- no tz (rare)
-  std::string trimmed = s;
-  auto dot = trimmed.find('.');
-  if (dot != std::string::npos) {
-    auto tz = trimmed.find_first_of("+-Z", dot);
-    trimmed = (tz != std::string::npos) ? trimmed.substr(0, dot) + trimmed.substr(tz)
-                                       : trimmed.substr(0, dot);
-  } else {
-    auto plus = trimmed.find('+', 11);
-    auto minus = trimmed.find('-', 11);
-    auto z = trimmed.find('Z', 11);
-    auto tz_pos = std::min({plus != std::string::npos ? plus : trimmed.size(),
-                            minus != std::string::npos ? minus : trimmed.size(),
-                            z != std::string::npos ? z : trimmed.size()});
-    if (tz_pos != trimmed.size()) trimmed = trimmed.substr(0, tz_pos);
-  }
-  std::tm tm{};
-  std::istringstream iss(trimmed);
-  iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-  if (iss.fail()) return false;
-  // timegm treats tm as UTC (POSIX/glibc). mktime would apply local
-  // TZ offset, which on a non-UTC host produces wrong epoch seconds.
-  out->set_seconds(timegm(&tm));
-  out->set_nanos(0);
-  return true;
-}
-
-
 
 // Map a SQL row to the Charging proto.
 Charging RowToCharging(const pqxx::row& r) {
