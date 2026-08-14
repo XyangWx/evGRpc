@@ -27,8 +27,8 @@ CREATE TABLE IF NOT EXISTS weather (
 CREATE TABLE IF NOT EXISTS consumption (
   Id                  UUID PRIMARY KEY,
   VehicleId           UUID NOT NULL REFERENCES vehicle(Id),
-  Start               TIMESTAMP NOT NULL,
-  EndTime             TIMESTAMP NOT NULL,
+  Start               TIMESTAMPTZ NOT NULL,
+  EndTime             TIMESTAMPTZ NOT NULL,
   BeginPercent        INT NOT NULL,
   EndPercent          INT NOT NULL,
   BeginMileage        INT NOT NULL,

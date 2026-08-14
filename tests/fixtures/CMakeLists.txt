@@ -32,13 +32,15 @@ target_link_libraries(evgrpc_test_fixtures PUBLIC
   Threads::Threads
   gtest               # SharedPgEnvironment derives from ::testing::Environment
 )
-# Combined schema loader: 001_initial.sql + 002_charging_timestamptz_migration.sql.
-# Concatenated at configure time so tests always apply both. Fresh
-# installs get TIMESTAMPTZ via 001; existing DBs get migrated by 002.
+# Combined schema loader: 001_initial.sql + 002_charging_timestamptz_migration.sql
+# + 003_consumption_timestamptz_migration.sql. Concatenated at configure
+# time so tests always apply all three. Fresh installs get TIMESTAMPTZ
+# via 001; existing DBs get migrated by 002 + 003.
 file(READ "${CMAKE_SOURCE_DIR}/sql/001_initial.sql" _sql_001)
 file(READ "${CMAKE_SOURCE_DIR}/sql/002_charging_timestamptz_migration.sql" _sql_002)
+file(READ "${CMAKE_SOURCE_DIR}/sql/003_consumption_timestamptz_migration.sql" _sql_003)
 file(WRITE "${CMAKE_BINARY_DIR}/generated/test_schema.sql"
-     "${_sql_001}\n${_sql_002}\n")
+     "${_sql_001}\n${_sql_002}\n${_sql_003}\n")
 # PUBLIC (not PRIVATE) so consumers (evgrpc_tests, evgrpc_integration_tests)
 # see these definitions when compiling their own sources. The existing
 # line at tests/fixtures/CMakeLists.txt:39 also uses PUBLIC — keep
@@ -47,6 +49,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/generated/test_schema.sql"
 target_compile_definitions(evgrpc_test_fixtures PUBLIC
   EVGRPC_TEST_SQL_PATH="${CMAKE_BINARY_DIR}/generated/test_schema.sql"
   EVGRPC_MIGRATION_002_PATH="${CMAKE_SOURCE_DIR}/sql/002_charging_timestamptz_migration.sql"
+  EVGRPC_MIGRATION_003_PATH="${CMAKE_SOURCE_DIR}/sql/003_consumption_timestamptz_migration.sql"
 )
 # Per-target coverage (see top-level CMakeLists.txt for why global fails).
 if(EVGRPC_COVERAGE)

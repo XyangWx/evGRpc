@@ -48,16 +48,22 @@ fi
 
 # --- locate schema files (relative to this script) ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Apply 001 (canonical schema) then 002 (TIMESTAMPTZ migration for
-# existing DBs). 002 is idempotent so safe on fresh installs.
+# Apply 001 (canonical schema) then 002 + 003 (TIMESTAMPTZ migrations
+# for existing DBs). Both migrations are idempotent so safe on fresh
+# installs.
 SQL_FILE_001="$SCRIPT_DIR/../sql/001_initial.sql"
 SQL_FILE_002="$SCRIPT_DIR/../sql/002_charging_timestamptz_migration.sql"
+SQL_FILE_003="$SCRIPT_DIR/../sql/003_consumption_timestamptz_migration.sql"
 if [[ ! -f "$SQL_FILE_001" ]]; then
   echo "ERROR: schema file not found: $SQL_FILE_001" >&2
   exit 1
 fi
 if [[ ! -f "$SQL_FILE_002" ]]; then
   echo "ERROR: schema file not found: $SQL_FILE_002" >&2
+  exit 1
+fi
+if [[ ! -f "$SQL_FILE_003" ]]; then
+  echo "ERROR: schema file not found: $SQL_FILE_003" >&2
   exit 1
 fi
 
@@ -70,7 +76,7 @@ MASKED_URL="$(printf '%s' "$DATABASE_URL" \
   | sed -E 's#://([^:]+):[^@]+@#://\1:***@#')"
 
 echo "→ target:  $MASKED_URL"
-echo "→ schema:  $SQL_FILE_001 + $SQL_FILE_002"
+echo "→ schema:  $SQL_FILE_001 + $SQL_FILE_002 + $SQL_FILE_003"
 echo "→ psql:    $(psql --version)"
 
 # --- verify connection first (cleaner failure mode than mid-load) ---
@@ -90,6 +96,10 @@ if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$SQL_FILE_001"; then
 fi
 if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$SQL_FILE_002"; then
   echo "ERROR: schema load failed (002_charging_timestamptz_migration.sql). See psql output above." >&2
+  exit 1
+fi
+if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$SQL_FILE_003"; then
+  echo "ERROR: schema load failed (003_consumption_timestamptz_migration.sql). See psql output above." >&2
   exit 1
 fi
 ELAPSED=$(($(date +%s) - START))

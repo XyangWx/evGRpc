@@ -45,6 +45,10 @@ class SchemaMigrationTest : public ::testing::Test {
     tx.commit();
   }
   std::string ColumnType(const std::string& column) {
+    return ColumnType("charging", column);
+  }
+  std::string ColumnType(const std::string& table,
+                         const std::string& column) {
     pqxx::nontransaction tx(*conn_);
     // PG folds unquoted identifiers to lowercase in information_schema,
     // so the columns are stored as 'starttime'/'endtime' regardless of
@@ -52,7 +56,8 @@ class SchemaMigrationTest : public ::testing::Test {
     // match.
     auto r = tx.exec_params(
         "SELECT data_type FROM information_schema.columns "
-        "WHERE table_name='charging' AND column_name=$1",
+        "WHERE table_name=$1 AND column_name=$2",
+        table,
         [&] {
           std::string lc = column;
           for (auto& c : lc) c = static_cast<char>(std::tolower(c));
@@ -215,6 +220,125 @@ TEST_F(SchemaMigrationTest, TimestamptzRoundTripAcrossSessions) {
       "SELECT (StartTime AT TIME ZONE 'UTC')::text FROM charging "
       "WHERE Id='00000000-0000-0000-0000-0000000000a1'");
   EXPECT_EQ(r[0][0].as<std::string>(), "2026-08-12 20:00:00");
+}
+
+TEST_F(SchemaMigrationTest, ConsumptionTimestamptzMigrationIsIdempotent) {
+  const std::string migration_path = EVGRPC_MIGRATION_003_PATH;
+  ASSERT_FALSE(migration_path.empty())
+      << "EVGRPC_MIGRATION_003_PATH not set; CMake should inject it";
+
+  auto apply = [&] {
+    std::ifstream f(migration_path);
+    std::stringstream ss; ss << f.rdbuf();
+    pqxx::work tx(*conn_);
+    tx.exec(ss.str());
+    tx.commit();
+  };
+
+  // First apply: columns are TIMESTAMPTZ.
+  apply();
+  EXPECT_EQ(ColumnType("consumption", "Start"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("consumption", "EndTime"), "timestamp with time zone");
+
+  // Second apply: still TIMESTAMPTZ, no error.
+  apply();
+  EXPECT_EQ(ColumnType("consumption", "Start"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("consumption", "EndTime"), "timestamp with time zone");
+}
+
+TEST_F(SchemaMigrationTest, ConsumptionTimestamptzRoundTripAcrossSessions) {
+  // After 003, consumption.Start/EndTime are TIMESTAMPTZ: an instant
+  // stored under one session TZ reads back as the same UTC instant
+  // under another. (Start AT TIME ZONE 'UTC')::text returns the UTC
+  // wall-clock only for a TIMESTAMPTZ column; a bare TIMESTAMP would
+  // render "2026-08-13 04:00:00+08" under Shanghai.
+  pqxx::work tx(*conn_);
+  tx.exec("SET TIME ZONE 'UTC'");
+  tx.exec_params(
+      "INSERT INTO vehicle (Id, Brand, CalibratedRange, BatteryCapacity, "
+      "                    PurchaseDate, LicensePlate) "
+      "VALUES ('00000000-0000-0000-0000-000000000002', 't', 0, 0, "
+      "        '2026-01-01', 'plate-2')");
+  tx.exec_params(
+      "INSERT INTO weather (Id, Name) "
+      "VALUES ('00000000-0000-0000-0000-000000000020', 'clear')");
+  tx.exec_params(
+      "INSERT INTO consumption (Id, VehicleId, Start, EndTime, BeginPercent, "
+      "  EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
+      "  HighestTemperature, LowestTemperature, WeatherId, Remark) VALUES "
+      "  ('00000000-0000-0000-0000-0000000000c1', "
+      "   '00000000-0000-0000-0000-000000000002', "
+      "   '2026-08-12T20:00:00Z', '2026-08-12T21:00:00Z', "
+      "   0, 0, 0, 0, 0, 0, 0.0, 0.0, "
+      "   '00000000-0000-0000-0000-000000000020', NULL)");
+  tx.commit();
+
+  pqxx::nontransaction read(*conn_);
+  read.exec("SET TIME ZONE 'Asia/Shanghai'");
+  auto r = read.exec_params(
+      "SELECT (Start AT TIME ZONE 'UTC')::text FROM consumption "
+      "WHERE Id='00000000-0000-0000-0000-0000000000c1'");
+  EXPECT_EQ(r[0][0].as<std::string>(), "2026-08-12 20:00:00");
+}
+
+TEST_F(SchemaMigrationTest, ConsumptionTimestamptzMigrationPerformsActualAlter) {
+  // Mirror of the charging PerformsActualAlter: reset the consumption
+  // table to bare TIMESTAMP (pre-003 state) and verify the migration
+  // promotes it to TIMESTAMPTZ. A typo in AT TIME ZONE 'UTC' would
+  // either fail or shift, and this test catches it.
+  const std::string migration_path = EVGRPC_MIGRATION_003_PATH;
+  ASSERT_FALSE(migration_path.empty())
+      << "EVGRPC_MIGRATION_003_PATH not set; CMake should inject it";
+
+  auto apply = [&] {
+    std::ifstream f(migration_path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    pqxx::work tx(*conn_);
+    tx.exec(ss.str());
+    tx.commit();
+  };
+
+  {
+    pqxx::work tx(*conn_);
+    tx.exec("DROP TABLE consumption CASCADE");
+    tx.commit();
+  }
+
+  ASSERT_NO_THROW({
+    pqxx::work tx(*conn_);
+    tx.exec(
+        "CREATE TABLE consumption ("
+        "  Id                  UUID PRIMARY KEY,"
+        "  VehicleId           UUID NOT NULL REFERENCES vehicle(Id),"
+        "  Start               TIMESTAMP NOT NULL,"
+        "  EndTime             TIMESTAMP NOT NULL,"
+        "  BeginPercent        INT NOT NULL,"
+        "  EndPercent          INT NOT NULL,"
+        "  BeginMileage        INT NOT NULL,"
+        "  EndMileage          INT NOT NULL,"
+        "  BeginRange          INT NOT NULL,"
+        "  EndRange            INT NOT NULL,"
+        "  HighestTemperature  DECIMAL(4,1) NOT NULL,"
+        "  LowestTemperature   DECIMAL(4,1) NOT NULL,"
+        "  WeatherId           UUID NOT NULL REFERENCES weather(Id),"
+        "  Remark              TEXT"
+        ")");
+    tx.commit();
+  });
+
+  EXPECT_EQ(ColumnType("consumption", "Start"), "timestamp without time zone");
+  EXPECT_EQ(ColumnType("consumption", "EndTime"), "timestamp without time zone");
+
+  ASSERT_NO_THROW(apply());
+
+  EXPECT_EQ(ColumnType("consumption", "Start"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("consumption", "EndTime"), "timestamp with time zone");
+
+  // Re-apply: the guard no longer matches, ALTER is skipped.
+  ASSERT_NO_THROW(apply());
+  EXPECT_EQ(ColumnType("consumption", "Start"), "timestamp with time zone");
+  EXPECT_EQ(ColumnType("consumption", "EndTime"), "timestamp with time zone");
 }
 
 }  // namespace evgrpc::test
