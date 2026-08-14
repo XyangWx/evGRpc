@@ -3,9 +3,6 @@
 #include <google/protobuf/util/time_util.h>
 #include <pqxx/pqxx>
 #include <string>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "db/exec.h"

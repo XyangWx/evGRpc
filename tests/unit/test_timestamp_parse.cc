@@ -29,6 +29,25 @@ TEST(ParseTimestampTest, FractionalSecondsDropped) {
   EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20.123456"), 1700000000L);
 }
 
+// Regression: fractional seconds must not swallow a non-zero offset.
+// The original body.resize(dot) truncated the offset too, reintroducing
+// the 8h shift for any sub-second-precision row under a non-UTC session.
+TEST(ParseTimestampTest, FractionalSecondsWithPositiveOffset) {
+  EXPECT_EQ(ParseSeconds("2023-11-15 06:13:20.123456+08"), 1700000000L);
+}
+
+TEST(ParseTimestampTest, FractionalSecondsWithPositiveOffsetMinutes) {
+  EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20.500000+05:30"), 1699980200L);
+}
+
+TEST(ParseTimestampTest, FractionalSecondsWithNegativeOffset) {
+  EXPECT_EQ(ParseSeconds("2023-11-14 14:13:20.999999-08"), 1700000000L);
+}
+
+TEST(ParseTimestampTest, FractionalSecondsWithZuluOffset) {
+  EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20.123456Z"), 1700000000L);
+}
+
 TEST(ParseTimestampTest, UtcOffsetZero) {
   EXPECT_EQ(ParseSeconds("2023-11-14 22:13:20.000000+00"), 1700000000L);
 }

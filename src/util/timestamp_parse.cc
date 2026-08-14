@@ -18,9 +18,15 @@ bool ParseTimestamp(const std::string& s, google::protobuf::Timestamp* out) {
 
   std::string body = s;
 
-  // 1. Drop fractional seconds ("...22:13:20.123456+00" -> "...22:13:20+00").
+  // 1. Drop fractional seconds but KEEP any trailing offset
+  //    ("...22:13:20.123456+00" -> "...22:13:20+00").
   const auto dot = body.find('.');
-  if (dot != std::string::npos) body.resize(dot);
+  if (dot != std::string::npos) {
+    const auto tzpos = body.find_first_of("+-Z", dot);
+    body = (tzpos != std::string::npos)
+               ? body.substr(0, dot) + body.substr(tzpos)
+               : body.substr(0, dot);
+  }
 
   // 2. Split a trailing UTC offset. TIMESTAMPTZ `::text` appends the
   //    session offset ("+08", "+05:30", "-08", or "Z"); a bare TIMESTAMP

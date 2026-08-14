@@ -8,6 +8,12 @@
 --
 -- Run AFTER sql/001_initial.sql and sql/002_charging_timestamptz_migration.sql
 -- have been applied at least once.
+--
+-- NOTE: after this migration, EXTRACT(YEAR/MONTH FROM Start) and
+-- (Start::date) become session-time-zone aware (like charging). Report
+-- boundaries may shift for rows near a day/month/year boundary when the
+-- session TZ differs from UTC. Confirm the postmaster timezone matches
+-- the intended report convention before deploying.
 
 BEGIN;
 
