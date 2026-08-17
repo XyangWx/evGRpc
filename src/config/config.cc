@@ -1,5 +1,6 @@
 #include "config/config.h"
 #include "auth/oidc_discovery.h"
+#include <chrono>
 #include <stdexcept>
 
 namespace evgrpc {
@@ -16,8 +17,14 @@ RuntimeConfig LoadConfig(const std::string& path) {
     out.log = schema.log;
 
     // OIDC discovery — populates jwks_url. Throws on failure.
-    out.oauth.jwks_url =
-        auth::DiscoverJwksUri(schema.oauth.issuer_url);
+    out.oauth.jwks_url = auth::DiscoverJwksUri(
+        schema.oauth.issuer_url,
+        auth::OidcDiscoveryConfig{
+            .connect_timeout = std::chrono::seconds(
+                schema.oauth.discovery_connect_timeout_seconds),
+            .read_timeout = std::chrono::seconds(
+                schema.oauth.discovery_read_timeout_seconds),
+        });
 
     return out;
 }

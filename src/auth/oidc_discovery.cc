@@ -1,7 +1,8 @@
 #include "auth/oidc_discovery.h"
 
-#include <httplib.h>
+#include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -19,73 +20,71 @@ std::string BuildDiscoveryUrl(const std::string& issuer_url) {
     return base + "/.well-known/openid-configuration";
 }
 
-// Parse "http://host[:port]" into host + port. Returns port 80 for
-// http and 443 for https if not specified. Throws on non-http(s).
-struct HostPort { std::string host; int port; };
-
-HostPort SplitIssuer(const std::string& issuer_url) {
-    if (!IsHttpUrl(issuer_url)) {
-        throw std::runtime_error(
-            "oidc discovery: issuer_url must be http(s):// (got \"" +
-            issuer_url + "\")");
+// RAII wrapper so the CURL* handle is freed on every exit path.
+struct CurlDeleter {
+    void operator()(CURL* c) const noexcept {
+        if (c) curl_easy_cleanup(c);
     }
-    bool https = issuer_url.rfind("https://", 0) == 0;
-    std::string rest = issuer_url.substr(https ? 8 : 7);  // strip scheme
+};
+using CurlPtr = std::unique_ptr<CURL, CurlDeleter>;
 
-    auto slash = rest.find('/');
-    std::string hostport = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    auto colon = hostport.find(':');
-    HostPort hp;
-    if (colon == std::string::npos) {
-        hp.host = hostport;
-        hp.port = https ? 443 : 80;
-    } else {
-        hp.host = hostport.substr(0, colon);
-        hp.port = std::stoi(hostport.substr(colon + 1));
+size_t WriteCb(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* s = static_cast<std::string*>(userdata);
+    s->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+// Fetches `url` via libcurl and returns the body. Throws on transport
+// failure or non-2xx. libcurl handles both http and https (unlike the
+// previous cpp-httplib path, which was http-only — this is what makes
+// https issuers like auth.mksword.com work).
+std::string FetchDiscovery(const std::string& url,
+                           const OidcDiscoveryConfig& cfg) {
+    CurlPtr curl{curl_easy_init()};
+    if (!curl) throw std::runtime_error("curl_easy_init failed");
+
+    std::string body;
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCb);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS,
+                     static_cast<long>(cfg.connect_timeout.count()));
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS,
+                     static_cast<long>(cfg.read_timeout.count()));
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+
+    CURLcode rc = curl_easy_perform(curl.get());
+    if (rc != CURLE_OK) {
+        throw std::runtime_error(std::string("curl_easy_perform failed: ") +
+                                 curl_easy_strerror(rc));
     }
-    return hp;
+
+    long http_code = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code < 200 || http_code >= 300) {
+        throw std::runtime_error("oidc discovery: non-2xx response " +
+                                 std::to_string(http_code) + " from " + url);
+    }
+    return body;
 }
 
 }  // namespace
 
 std::string DiscoverJwksUri(const std::string& issuer_url,
                             const OidcDiscoveryConfig& cfg) {
-    auto hp = SplitIssuer(issuer_url);  // throws on non-http
-    std::string url = BuildDiscoveryUrl(issuer_url);
-
-    httplib::Client client(hp.host, hp.port);
-    client.set_connection_timeout(cfg.connect_timeout);
-    client.set_read_timeout(cfg.read_timeout);
-    // cpp_httplib supports http only on this code path; the public
-    // OIDC discovery URL the test points at is http. For https
-    // production issuers, set up an http -> https proxy or use
-    // libcurl in a follow-up. (Documented in spec §1 Out of Scope.)
-
-    // cpp_httplib::Client::Get treats its argument as the request path,
-    // not a full URL — passing the full URL produces a malformed request
-    // line ("GET http://host/.well-known/...") that the server rejects
-    // with 404. Pass only the path component ("/.well-known/...").
-    auto scheme_pos = url.find("://");
-    auto path_start = (scheme_pos == std::string::npos)
-                          ? std::string::npos
-                          : url.find('/', scheme_pos + 3);
-    std::string path_only =
-        (path_start == std::string::npos) ? "/" : url.substr(path_start);
-
-    auto res = client.Get(path_only.c_str());
-    if (!res) {
+    if (!IsHttpUrl(issuer_url)) {
         throw std::runtime_error(
-            "oidc discovery: HTTP request failed for " + url);
+            "oidc discovery: issuer_url must be http(s):// (got \"" +
+            issuer_url + "\")");
     }
-    if (res->status / 100 != 2) {
-        throw std::runtime_error(
-            "oidc discovery: non-2xx response " +
-            std::to_string(res->status) + " from " + url);
-    }
+    const std::string url = BuildDiscoveryUrl(issuer_url);
+
+    const std::string body = FetchDiscovery(url, cfg);
 
     nlohmann::json j;
     try {
-        j = nlohmann::json::parse(res->body);
+        j = nlohmann::json::parse(body);
     } catch (const nlohmann::json::parse_error& e) {
         throw std::runtime_error(
             "oidc discovery: malformed JSON body: " +

@@ -53,6 +53,8 @@ TEST(ConfigLoaderTest, AppliesAllDefaults) {
   })");
   auto cfg = evgrpc::LoadSchema(path);
   EXPECT_EQ(cfg.oauth.jwks_cache_ttl_seconds, 3600);
+  EXPECT_EQ(cfg.oauth.discovery_connect_timeout_seconds, 5);
+  EXPECT_EQ(cfg.oauth.discovery_read_timeout_seconds, 15);
   EXPECT_EQ(cfg.grpc.port, 50051);
   EXPECT_EQ(cfg.log.level, "info");
   EXPECT_EQ(cfg.log.file, "");
@@ -93,6 +95,52 @@ TEST(ConfigLoaderTest, RejectsInvalidIssuerUrl) {
     "grpc": {}, "log": {}
   })");
   EXPECT_THROW(evgrpc::LoadSchema(path), std::runtime_error);
+  std::remove(path.c_str());
+}
+
+TEST(ConfigLoaderTest, RejectsBadDiscoveryTimeout) {
+  // connect timeout out of range (0) must be rejected.
+  auto path = WriteTempJson(R"({
+    "database": { "url": "postgresql://u@h/d" },
+    "oauth": { "issuer_url": "https://a", "audience": "x",
+               "discovery_connect_timeout_seconds": 0 },
+    "grpc": {}, "log": {}
+  })");
+  EXPECT_THROW(evgrpc::LoadSchema(path), std::runtime_error);
+  std::remove(path.c_str());
+
+  // read timeout above the cap (600) must be rejected.
+  path = WriteTempJson(R"({
+    "database": { "url": "postgresql://u@h/d" },
+    "oauth": { "issuer_url": "https://a", "audience": "x",
+               "discovery_read_timeout_seconds": 601 },
+    "grpc": {}, "log": {}
+  })");
+  EXPECT_THROW(evgrpc::LoadSchema(path), std::runtime_error);
+  std::remove(path.c_str());
+
+  // Non-integer read timeout must be rejected.
+  path = WriteTempJson(R"({
+    "database": { "url": "postgresql://u@h/d" },
+    "oauth": { "issuer_url": "https://a", "audience": "x",
+               "discovery_read_timeout_seconds": "ten" },
+    "grpc": {}, "log": {}
+  })");
+  EXPECT_THROW(evgrpc::LoadSchema(path), std::runtime_error);
+  std::remove(path.c_str());
+}
+
+TEST(ConfigLoaderTest, AppliesDiscoveryTimeoutOverride) {
+  auto path = WriteTempJson(R"({
+    "database": { "url": "postgresql://u@h/d" },
+    "oauth": { "issuer_url": "https://a", "audience": "x",
+               "discovery_connect_timeout_seconds": 10,
+               "discovery_read_timeout_seconds": 30 },
+    "grpc": {}, "log": {}
+  })");
+  auto cfg = evgrpc::LoadSchema(path);
+  EXPECT_EQ(cfg.oauth.discovery_connect_timeout_seconds, 10);
+  EXPECT_EQ(cfg.oauth.discovery_read_timeout_seconds, 30);
   std::remove(path.c_str());
 }
 

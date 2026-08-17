@@ -22,7 +22,8 @@ const std::set<std::string> kValidLogLevels = {
 
 const std::set<std::string> kAllowedDatabaseKeys = {"url"};
 const std::set<std::string> kAllowedOAuthKeys = {
-    "issuer_url", "audience", "jwks_cache_ttl_seconds"};
+    "issuer_url", "audience", "jwks_cache_ttl_seconds",
+    "discovery_connect_timeout_seconds", "discovery_read_timeout_seconds"};
 const std::set<std::string> kAllowedGrpcKeys = {"port"};
 const std::set<std::string> kAllowedLogKeys = {
     "level", "file", "max_size_mb", "max_files"};
@@ -224,6 +225,34 @@ SchemaConfig LoadSchema(const std::string& path) {
                         errs.Add("oauth.jwks_cache_ttl_seconds: must be <= 86400 (got " + std::to_string(n) + ")");
                     } else {
                         cfg.oauth.jwks_cache_ttl_seconds = n;
+                    }
+                }
+            }
+            if (oa.contains("discovery_connect_timeout_seconds")) {
+                if (!oa["discovery_connect_timeout_seconds"].is_number_integer()) {
+                    errs.Add("oauth.discovery_connect_timeout_seconds: must be an integer");
+                } else {
+                    int n = oa["discovery_connect_timeout_seconds"].get<int>();
+                    if (n <= 0) {
+                        errs.Add("oauth.discovery_connect_timeout_seconds: must be > 0 (got " + std::to_string(n) + ")");
+                    } else if (n > 120) {
+                        errs.Add("oauth.discovery_connect_timeout_seconds: must be <= 120 (got " + std::to_string(n) + ")");
+                    } else {
+                        cfg.oauth.discovery_connect_timeout_seconds = n;
+                    }
+                }
+            }
+            if (oa.contains("discovery_read_timeout_seconds")) {
+                if (!oa["discovery_read_timeout_seconds"].is_number_integer()) {
+                    errs.Add("oauth.discovery_read_timeout_seconds: must be an integer");
+                } else {
+                    int n = oa["discovery_read_timeout_seconds"].get<int>();
+                    if (n <= 0) {
+                        errs.Add("oauth.discovery_read_timeout_seconds: must be > 0 (got " + std::to_string(n) + ")");
+                    } else if (n > 600) {
+                        errs.Add("oauth.discovery_read_timeout_seconds: must be <= 600 (got " + std::to_string(n) + ")");
+                    } else {
+                        cfg.oauth.discovery_read_timeout_seconds = n;
                     }
                 }
             }

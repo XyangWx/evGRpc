@@ -5,7 +5,9 @@
   "oauth": {
     "issuer_url": "https://auth.example.com/",
     "audience": "evgrpc-api",
-    "jwks_cache_ttl_seconds": 3600
+    "jwks_cache_ttl_seconds": 3600,
+    "discovery_connect_timeout_seconds": 5,
+    "discovery_read_timeout_seconds": 15
   },
   "grpc": {
     "port": 50051

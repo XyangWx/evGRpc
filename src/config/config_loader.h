@@ -11,6 +11,11 @@ struct OAuthConfig {
     std::string issuer_url = "";
     std::string audience = "";
     int jwks_cache_ttl_seconds = 3600;
+    // OIDC discovery HTTP fetch timeouts (seconds). Defaults are tuned for
+    // cold-start https discovery where the first DNS+TLS round-trip can
+    // exceed a few seconds.
+    int discovery_connect_timeout_seconds = 5;
+    int discovery_read_timeout_seconds = 15;
 };
 struct GrpcConfig {
     int port = 50051;

@@ -223,7 +223,9 @@ override with `--config <path>` or `-c <path>`.
   "oauth": {
     "issuer_url": "https://issuer.example.com/",
     "audience": "evgrpc-api",
-    "jwks_cache_ttl_seconds": 3600
+    "jwks_cache_ttl_seconds": 3600,
+    "discovery_connect_timeout_seconds": 5,
+    "discovery_read_timeout_seconds": 15
   },
   "grpc": { "port": 50051 },
   "log": {
@@ -249,6 +251,12 @@ Full validation rules and error messages are in
 JWKS URL is fetched automatically at startup from
 `{issuer}/.well-known/openid-configuration`. If the discovery endpoint
 is unreachable, the server fails fast at startup.
+
+Discovery uses HTTPS-capable libcurl. The HTTP fetch timeouts are
+tunable via `oauth.discovery_connect_timeout_seconds` (default 5) and
+`oauth.discovery_read_timeout_seconds` (default 15) — the defaults are
+sized for cold-start https discovery where the first DNS+TLS round-trip
+can exceed a few seconds.
 
 ### Docker
 
