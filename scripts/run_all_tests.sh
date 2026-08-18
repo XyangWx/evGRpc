@@ -116,7 +116,15 @@ run_suite "integration (evgrpc_integration_tests, 95 cases)" \
 run_suite "e2e (evgrpc_e2e_tests, 2 cases)" \
   "./cmake-build-debug/tests/integration/evgrpc_e2e_tests"
 
-# 4. Coverage gate (optional — needs DATABASE_URL).
+# 4. Python gRPC integration tests (pytest, ~99 cases).
+# Assumes `evgrpc-tests` conda env exists (created via `conda env create
+# -f environment.yml`). Hits the docker-compose stack via the Bearer-token
+# helper; namespace prefix isolates test rows. Auto-skips if IdP or
+# docker-compose unreachable.
+run_suite "python gRPC IT (pytest, ~99 cases)" \
+  "conda run -n evgrpc-tests pytest tests/python/ --tb=short -q"
+
+# 5. Coverage gate (optional — needs DATABASE_URL).
 if (( DO_COVERAGE )); then
   if [[ -z "${DATABASE_URL:-}" || -z "${EVGRPC_TEST_DATABASE_URL:-}" ]]; then
     echo
