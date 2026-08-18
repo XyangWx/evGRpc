@@ -370,19 +370,18 @@ class TestConstraints:
             stub.CreateCharging(req)
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
-    def test_create_charging_charger_type_unspecified_uses_default(
+    def test_create_charging_charger_type_unspecified_returns_invalid(
         self, channel, namespace, pg_conn, vehicle_and_source
     ):
-        """UNSPECIFIED enum → INTERNAL.
+        """UNSPECIFIED enum → INVALID_ARGUMENT (app-level validation).
 
-        ChargerTypeLabel(UNSPECIFIED) returns ''. PG enum cast '' = NULL,
-        hits NOT NULL constraint. `not_null_violation` is NOT a subclass of
-        `data_exception` so error.cc falls through to default INTERNAL.
-        Surprising but documents current production behavior.
+        ChargerType must be FAST or SLOW. UNSPECIFIED is the proto3 default
+        and a sentinel meaning "no value"; production now rejects it
+        with INVALID_ARGUMENT before hitting the SQL INSERT.
         """
         stub = rpc.ChargingServiceStub(channel)
         vid, scid = vehicle_and_source
         req = _make_charging_req(vid, scid, charger_type=pb.CHARGER_TYPE_UNSPECIFIED)
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateCharging(req)
-        assert exc.value.code() == grpc.StatusCode.INTERNAL
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT

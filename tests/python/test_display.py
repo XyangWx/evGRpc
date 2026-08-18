@@ -72,16 +72,16 @@ class TestHappyPath:
         assert resp.total_kwh == 0.0
         assert resp.count == 0
 
-    def test_get_vehicle_cost_summary_no_data_returns_internal(
+    def test_get_vehicle_cost_summary_no_data_returns_invalid(
         self, channel, namespace
     ):
-        """Random vehicle_id with no charging → INTERNAL ("no aggregate row").
+        """Random vehicle_id with no charging → INVALID_ARGUMENT ("no aggregate row").
 
-        Production code has an EXISTS pre-check that fires INTERNAL when
-        the filter matches zero rows. COALESCE-on-empty-set would have
-        returned zeros, but the pre-check precedes the aggregation. Tests
-        documenting this behavior; production change would be a separate
-        spec (likely breaking).
+        Production code has an EXISTS pre-check that fires INVALID_ARGUMENT
+        when the filter matches zero rows. The v1.1.0 RPCs (Daily/Monthly/
+        AnnualChargingReport) handle this case with COALESCE-on-empty-set
+        and return zeros; the legacy GetVehicleCostSummary prefers a
+        clear INVALID_ARGUMENT over silent zeros.
         """
         stub = rpc.DisplayServiceStub(channel)
         with pytest.raises(grpc.RpcError) as exc:
@@ -92,7 +92,7 @@ class TestHappyPath:
                     end_time=datetime(2024, 12, 31),
                 )
             )
-        assert exc.value.code() == grpc.StatusCode.INTERNAL
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
     def test_get_vehicle_cost_summary_empty_vehicle_id_returns_invalid(
         self, channel, namespace
