@@ -11,3 +11,7 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+cmake-build-debug/
+cmake-build-cov/
+log/
