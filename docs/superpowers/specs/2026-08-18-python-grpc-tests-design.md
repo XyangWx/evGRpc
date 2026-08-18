@@ -1,29 +1,73 @@
 # Python gRPC Integration Test Suite for Deployed evGRpc
 
 - **Date:** 2026-08-18
-- **Status:** Design (awaiting review)
+- **Status:** Design (v2, awaiting re-review after first-review issues)
 - **Replaces:** none
-- **Supersedes:** none
+- **Supersedes:** v1 of this spec
 
 ## 0. Revision History
 
-- **v1 (initial):** First draft after brainstorming session.
+- **v1 → v2:** Spec reviewer found 4 blocking issues + 6 non-blocking + 8
+  recommendations. Resolved:
+    - RPC count reconciled: 30 RPCs total (was misstated as 28 in v1).
+    - VARCHAR generators rewritten: `namespace` is now bare 8-hex;
+      `make_license_plate(ns` / `make_weather_name(ns` etc. add the
+      `test-` prefix and a short suffix so every emitted value fits
+      the relevant `VARCHAR(n`)` limit.
+    - Cleanup ordering: §4 and §8.3 agree on **children-first** order
+      (`consumption → charging → vehicle → weather → source_category`).
+      Schema FKs verified as bare `REFERENCES` with no `ON DELETE`
+      clause → PG default NO ACTION (= RESTRICT), so children MUST be
+      removed before parents.
+    - Test-count consistency: 161 (not 150/156/161). Budgets recalculated:
+      target ≤120s, hard-fail > 120s. Old `<90s / hard-fail > 120s` was
+      self-inconsistent.
+    - Schema columns verified against `sql/001_initial.sql`. No more
+      "`Location` (or `Remark`)" hedging — `charging.Location` is
+      VARCHAR(100) NOT NULL by test discipline; `consumption.Remark`
+      is TEXT nullable, populated by test discipline.
+    - Hard-crash isolation: added **session-start sweep** (`DELETE ...
+      WHERE <col> LIKE 'test-%'`) before the per-test run, in addition
+      to the existing session-end sweep. Orphans from SIGKILL/OOM are
+      cleaned on the next pytest invocation regardless of namespace.
+    - "C3" leftover terminology removed. Cleanup layers now named L1
+      (per-function) and L2 (per-session).
+    - Auth failure paths expanded: replaced "expired-token" test
+      (unimplementable without admin UI changes) with "forged token"
+      (valid JWT structure, signed with attacker's RSA key — IdP's
+      JWKS verification rejects).
+    - `auth_token` subprocess failure → explicit `pytest.skip` (matches
+      the `channel` fixture's behavior).
+    - Token cache race: documented `EVGRPC_CACHE` env var for
+      per-invocation isolation in CI; default keeps the shared
+      `/tmp/evgrpc_token.json`.
+    - Recommendations addressed: `psycopg[binary]` moved under
+      `pip:`; TRUNCATE rollback wording fixed; `FutureTimeoutError`
+      named correctly; proto layout reconciled (subdir output, not
+      flat); Goal 9 vs §5.4 reconciled (stubs committed, gen is
+      opt-in); `make_uuid()` purpose documented; `sed -i` GNU note
+      added.
 
 ## 1. Background
 
-`evGRpc` ships 6 gRPC services with **28 RPCs** total. The C++ test
-suite (`tests/unit/`, `tests/integration/`, `tests/integration/smoke_e2e_test.cc`)
-covers the service layer end-to-end against a real Postgres + an
-in-process gRPC server. It is fast, thorough on the C++ side, and runs
-under `ctest`. What's missing is a **client-side integration test
-suite written in Python**:
+`evGRpc` ships 6 gRPC services with **30 RPCs** total (verified against
+`proto/evgrpc/*.proto` via `grep -c '^  rpc '`):
+WeatherService (2) + VehicleService (5) + SourceCategoryService (2)
++ ChargingService (5) + ConsumptionService (5) + DisplayService (11) = 30.
+
+The C++ test suite (`tests/unit/`, `tests/integration/`,
+`tests/integration/smoke_e2e_test.cc`) covers the service layer
+end-to-end against a real Postgres + an in-process gRPC server. It is
+fast, thorough on the C++ side, and runs under `ctest`. What's missing
+is a **client-side integration test suite written in Python**:
 
 1. The C++ suite boots its own `TestServer` (in-process gRPC + JWKS
-   HTTP + bypass auth) inside the test binary. It does **not** exercise
-   the `nginx → evgrpc → Postgres` stack that production traffic flows
-   through. Bugs that only show up at the deployment boundary — wrong
-   gRPC framing through nginx, HTTP/2 negotiation, OIDC bearer-token
-   rejection, response size limits — are invisible to the C++ suite.
+   HTTP + bypass auth) inside the test binary. It does **not**
+   exercise the `nginx → evgrpc → Postgres` stack that production
+   traffic flows through. Bugs that only show up at the deployment
+   boundary — wrong gRPC framing through nginx, HTTP/2 negotiation,
+   OIDC bearer-token rejection, response size limits — are invisible
+   to the C++ suite.
 2. The OIDC interceptor (`src/auth/authenticate.cc`) is exercised in
    C++ by `tests/unit/test_authenticate.cc` (validator only) and the
    C++ integration suite (`authenticate` flag toggle on `TestServer`).
@@ -42,11 +86,11 @@ behavior-driven test additions.
 
 ## 2. Goals
 
-1. **All 28 RPCs have at least one happy-path test** exercised through
-   `localhost:80` with a real Bearer token from
+1. **All 30 RPCs have at least one happy-path test** exercised
+   through `localhost:80` with a real Bearer token from
    `https://auth-test.mksword.com/` (via the existing `evgrpc-token`
    helper).
-2. **All 28 RPCs have at least one error-path test** (NOT_FOUND,
+2. **All 30 RPCs have at least one error-path test** (NOT_FOUND,
    INVALID_ARGUMENT, ALREADY_EXISTS, FAILED_PRECONDITION,
    UNAUTHENTICATED — whichever is reachable for that RPC).
 3. **Data-boundary tests** for the fields with explicit limits in
@@ -60,40 +104,51 @@ behavior-driven test additions.
    `charging.VehicleId` → `vehicle.Id`,
    `charging.SourceCategoryId` → `source_category.Id` — insert with
    non-existent parent, expect `FAILED_PRECONDITION`.
-6. **Auth enforcement tests** at the gRPC layer: no token → 401;
-   expired token → 401; bogus token → 401. (Authorization-scope /
-   RBAC tests deferred — see §3.)
-7. **Total runtime ≤ 90s** on the dev VM for the full suite
-   (~150 cases × ≤ 0.6 s/case). Hard-fail threshold is `> 120s`.
+6. **Auth enforcement tests** at the gRPC layer:
+   - no token → `UNAUTHENTICATED`
+   - malformed token → `UNAUTHENTICATED`
+   - forged token (valid JWT shape, signed with attacker's RSA key)
+     → `UNAUTHENTICATED`
+
+   (Scope / RBAC tests deferred — see §3.)
+7. **Total runtime ≤ 120s** on the dev VM for the full suite
+   (161 cases × ~0.65s avg = ~105s typical). Hard-fail threshold
+   is `> 120s` (matching the threshold in §9.1). If a future change
+   pushes past 120s reliably, the threshold and/or per-case budget
+   must be revisited.
 8. **No pollution of dev data**: tests insert rows only with a unique
-   `test-<uuid>-` prefix and clean up at function + session teardown.
+   `test-<random>-` prefix and clean up at function teardown, session
+   end, AND session start (defense against hard crashes).
 9. **One-command setup**: `conda env create -f environment.yml &&
-   conda activate evgrpc-tests && bash scripts/gen_python_stubs.sh &&
-   pytest tests/python/ -v` works on a fresh clone.
-10. The suite **slots into `run_all_tests.sh`** as a final stage that
-    fails the script non-zero on any pytest failure.
+   conda activate evgrpc-tests && pytest tests/python/ -v` works on a
+   fresh clone without re-running the protoc step (stubs are
+   committed).
+10. The suite **slots into `run_all_tests.sh`** as a final stage
+    that fails the script non-zero on any pytest failure.
 
 ## 3. Non-Goals
 
-- RBAC / scope-claim enforcement (`evgrpc` does not currently
+- RBAC / per-RPC scope enforcement (`evgrpc` does not currently
   enforce per-RPC scopes; the OIDC validator only checks iss/aud/exp).
-  When the server grows scope checking, this suite should be extended
-  — but not in this spec.
-- Branch-coverage reporting. Line coverage is not even a goal (pytest
-  doesn't natively cover Python client code with the same rigor as
-  gtest on C++). Pass/fail is the success metric.
+  When the server grows scope checking, this suite should be
+  extended — but not in this spec.
+- Expired-token test: requires an IdP admin change (separate client
+  with short token lifetime) to mint a token we can then let expire
+  cheaply. Out of scope; the 3 auth tests in Goal 6 already cover
+  the rejection surface without it.
+- Branch-coverage reporting. Pass/fail is the success metric.
 - Performance benchmarks, fuzz tests, property-based tests.
 - Mock-gRPC-server unit tests. The whole point is to hit the real
-  deployed service. Pure unit tests of the Python client wrapper
-  belong in a separate (future) spec.
-- Re-enabling testcontainers-cpp / ephemeral Postgres. The suite uses
-  the existing `evgrpc` database via the existing docker-compose stack.
+  deployed service.
+- Re-enabling testcontainers-cpp / ephemeral Postgres. The suite
+  uses the existing `evgrpc` database via the existing
+  docker-compose stack.
 - Migration of the existing C++ integration suite. That suite stays
   as-is and continues to run via `ctest`. The new Python suite is
   additive.
 - Auto-start of `docker compose up`. The Python suite expects
-  `localhost:80` to already be serving. If it isn't, the session is
-  skipped with a clear message (see §6.4).
+  `localhost:80` to already be serving. If it isn't, the session
+  is skipped with a clear message (see §6.2).
 
 ## 4. Architecture
 
@@ -103,16 +158,23 @@ pytest tests/python/ -v
        ├─ conftest.py::auth_token       # subprocess evgrpc-token, cached
        ├─ conftest.py::channel          # insecure localhost:80, bearer interceptor
        │     - fails fast if server unreachable → pytest.skip
-       ├─ conftest.py::namespace        # test-<uuid>-  prefix (session-unique)
+       ├─ conftest.py::namespace        # 8-hex session-unique prefix (no 'test-')
        └─ conftest.py::cleanup_namespace (autouse, session scope)
-             - DELETE FROM vehicle WHERE license_plate LIKE 'test-<ns>%'
-             - DELETE FROM weather WHERE name LIKE 'test-<ns>%'
-             - DELETE FROM source_category WHERE name LIKE 'test-<ns>%'
-             - DELETE FROM charging WHERE ... LIKE 'test-<ns>%'
-             - DELETE FROM consumption WHERE ... LIKE 'test-<ns>%'
+             PRE-yield (session start):
+               DELETE FROM vehicle         WHERE license_plate LIKE 'test-%'
+               DELETE FROM weather         WHERE name          LIKE 'test-%'
+               DELETE FROM source_category WHERE name          LIKE 'test-%'
+               DELETE FROM charging        WHERE location      LIKE 'test-%'
+                                            OR remark           LIKE 'test-%'
+               DELETE FROM consumption     WHERE remark         LIKE 'test-%'
+             (children-first; FKs verified as NO ACTION in §8.3)
+             yield
+             POST-yield (session teardown):
+               same DELETE sweep as pre-yield
   └─ Function scope (per test):
-       ├─ _helpers.py::truncate_my_rows()  # tracks rows inserted, DELETEs on teardown
-       └─ _helpers.py::make_<entity>()     # builds request proto with test-<ns> fields
+       └─ _helpers.py::TrackedInsert context manager
+             yield
+             on __exit__: DELETE FROM <table> WHERE id = ANY(<ids>)
   └─ Test file per service:
        test_weather.py
        test_vehicle.py
@@ -120,6 +182,7 @@ pytest tests/python/ -v
        test_charging.py
        test_consumption.py
        test_display.py
+       test_auth_enforcement.py
        └─ TestHappyPath
        └─ TestErrorPath
        └─ TestBoundaries
@@ -128,10 +191,17 @@ pytest tests/python/ -v
 
 The suite is **one process, one channel, one namespace per
 `pytest` invocation**. Tests run serially (`pytest-xdist` is not
-required). Each test inserts data with the session-unique
-`test-<ns>-` prefix and tears down its own rows on function exit.
-The session-end fixture also wipes anything that escaped (defense in
-depth).
+required). Each test inserts data with `test-<random>-` prefix and
+tears down its own rows on function exit. The session-scope
+`cleanup_namespace` fixture sweeps `test-%` rows twice: **before** the
+session (cleans orphans from any prior SIGKILL/OOM) and **after** the
+session (cleans this run). This double-sweep covers all three crash
+modes:
+
+- clean exit → both sweeps run
+- `pytest` exception → session-end sweep runs (context manager)
+- SIGKILL/OOM/power-loss → next pytest run's session-start sweep
+  catches the orphans
 
 ## 5. Components
 
@@ -139,41 +209,71 @@ depth).
 
 Defines four session-scoped fixtures:
 
-- **`auth_token`** — runs `subprocess.check_output(["evgrpc-token"])`
-  once at session start. Reused across all tests. When the cached
-  token expires (`> 50min` from issue), re-runs. The cache file at
-  `/tmp/evgrpc_token.json` is shared with the CLI helper, so
-  interactive use stays in sync.
+- **`auth_token`** — runs `subprocess.check_output(["evgrpc-token"],
+  timeout=15)`. Reused across all tests. The shared cache at
+  `/tmp/evgrpc_token.json` means the subprocess is a ~50ms cache hit
+  for the entire session. When `evgrpc-token` exits non-zero or
+  times out, the fixture raises `pytest.skip("evgrpc-token failed:
+  <reason>, skipping Python gRPC IT")` — matches the `channel`
+  fixture's skip semantics.
+
+  For parallel/isolated runs (e.g. two pytest invocations in
+  different worktrees against the same dev box), set
+  `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.>.json` to give each run its
+  own cache file. (Default keeps the shared cache.)
+
 - **`channel`** — creates an insecure gRPC channel to `localhost:80`,
   installs a metadata-injecting interceptor that adds
   `authorization: Bearer <auth_token>` to every call. Validates the
-  channel with `grpc.channel_ready_future(...).result(timeout=5)`.
-  If the timeout elapses, raises a session-skip via
-  `pytest.skip("evgrpc:80 unreachable, skipping Python gRPC IT")`.
-- **`namespace`** — generates `test-<8-char-uuid>-` once per session.
-  Used by every test as a prefix on all generated identifiers
-  (`license_plate`, `weather.name`, `source_category.name`,
-  `Location` strings).
-- **`cleanup_namespace`** — `autouse=True`, `scope="session"`. After
-  `yield`, opens a `psycopg` connection to `evgrpc` DB and runs the
-  `DELETE ... LIKE 'test-<ns>%'` cleanup listed in §4. Logs how many
-  rows per table were deleted.
+  channel with `grpc.channel_ready_future(chan).result(timeout=5)`.
+  If `grpc.FutureTimeoutError` is raised, the fixture calls
+  ``pytest.skip("evgrpc:80 unreachable, skipping Python gRPC IT")``.
+  The `TestAuthEnforcement` file uses its own bare channel (no
+  interceptor) for the missing-header / bad-token tests — see §5.5.
+
+- **`namespace`** — generates `uuid.uuid4().hex[:8]` once per
+  session (8-char random hex, **no `test-` prefix**). The helpers in
+  §5.2 add the `test-` prefix and a short suffix so generated
+  identifiers fit VARCHAR limits.
+
+- **`cleanup_namespace`** — `autouse=True`, `scope="session"`. Runs
+  the children-first DELETE sweep both **before** and **after** the
+  yield. Logs per-table row counts deleted in the post-yield sweep.
+  Wraps the post-yield DELETE in `try/except Exception as e: log
+  warning, continue` — cleanup failures must not mask test results.
 
 ### 5.2 `tests/python/_helpers.py`
 
-- **`class TrackedInsert`** — context manager that yields a closure
-  to register rows the test inserted (`register(table, id)`), then
-  on `__exit__` runs `DELETE FROM <table> WHERE id = ANY(<ids>)`.
-  Used by function-level teardown for the per-test cleanup layer
-  (C3 first half).
-- **`make_license_plate(ns)`** — returns `f"test-{ns}{uuid4()}"`,
-  length ≤ 15 chars (VARCHAR(15) limit).
-- **`make_weather_name(ns)`** — returns `f"test-{ns}{uuid4()}"`,
-  length ≤ 36 chars (VARCHAR(36) limit).
-- **`make_uuid()`** — returns `str(uuid.uuid4())` (for `Vehicle.Id`).
-- **`mint_grpc_channel(addr, token)`** — factory used by `channel`
-  fixture; also exported for any test that needs a one-off channel
-  (none expected in v1).
+- **`class TrackedInsert`** — context manager yielding a closure to
+  register rows the test inserted (`register(table, id)`). On
+  `__exit__` runs `DELETE FROM <table> WHERE id = ANY(<ids>)`. This
+  is the per-function cleanup layer (L1).
+
+- **`make_license_plate(ns: str) -> str`** — returns
+  `f"test-{ns}{uuid.uuid4().hex[:2]}"`. With `ns` = 8-hex, output
+  length = 5 + 8 + 2 = **15 chars exactly** (VARCHAR(15) limit).
+  2-hex random suffix gives 256 values per namespace, which is
+  collision-free for ~150 tests with overwhelming probability.
+
+- **`make_weather_name(ns: str) -> str`** — returns
+  `f"test-{ns}{uuid.uuid4().hex[:16]}"`. Length = 5 + 8 + 16 = 29
+  chars (VARCHAR(36) limit, 7-char margin). Same form for
+  `make_source_category_name(ns)`.
+
+- **`make_charging_location(ns: str) -> str`** — returns
+  `f"test-loc-{ns}{uuid.uuid4().hex[:8]}"`. Length = 9 + 8 + 8 = 25
+  chars (VARCHAR(100) limit, comfortable headroom). Used to populate
+  `charging.Location` so cleanup `LIKE 'test-%'` matches.
+
+- **`make_consumption_remark(ns: str) -> str`** — returns
+  `f"test-rem-{ns}{uuid.uuid4().hex[:8]}"`. Length = 9 + 8 + 8 = 25
+  chars; `Remark` is `TEXT` (no limit), but the `test-` prefix is
+  what makes cleanup `LIKE 'test-%'` match.
+
+- **`make_uuid() -> str`** — returns `str(uuid.uuid4())`. Used by
+  error-path tests probing `GetXxx` / `UpdateXxx` / `DeleteXxx`
+  with a random UUID expected to NOT exist (server generates UUIDs
+  for primary keys, so tests don't need to manufacture one).
 
 ### 5.3 Per-service test files
 
@@ -181,22 +281,22 @@ Each follows the same shape:
 
 ```python
 # test_vehicle.py
-import grpc, pytest
-from tests.python.gen import evgrpc_pb2 as pb
-from tests.python.gen import evgrpc_pb2_grpc as rpc
+import grpc, pytest, uuid
+from tests.python.gen.evgrpc import vehicle_pb2 as pb
+from tests.python.gen.evgrpc import vehicle_pb2_grpc as rpc
 from tests.python._helpers import TrackedInsert, make_license_plate, make_uuid
 
 class TestHappyPath:
     def test_create_vehicle_returns_id_and_brand(self, channel, namespace):
         stub = rpc.VehicleServiceStub(channel)
         req = pb.CreateVehicleRequest(
-            brand=f"test-{namespace}brand",
+            brand=f"test-brand-{namespace}",
             calibrated_range_km=400,
             battery_capacity_kwh=75.0,
             purchase_date=...,
             license_plate=make_license_plate(namespace),
         )
-        with TrackedInsert("vehicle", stub=stub) as ti:
+        with TrackedInsert("vehicle") as ti:
             resp = stub.CreateVehicle(req)
             ti.register("vehicle", resp.id)
         assert resp.brand == req.brand
@@ -206,13 +306,12 @@ class TestErrorPath:
     def test_get_vehicle_unknown_id_returns_not_found(self, channel, namespace):
         stub = rpc.VehicleServiceStub(channel)
         with pytest.raises(grpc.RpcError) as exc:
-            stub.GetVehicle(pb.GetVehicleRequest(id=str(uuid.uuid4())))
+            stub.GetVehicle(pb.GetVehicleRequest(id=make_uuid()))
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
 class TestBoundaries:
-    @pytest.mark.parametrize("plate_len", [1, 15, 16])
-    def test_create_vehicle_license_plate_length(self, channel, namespace, plate_len):
-        # 1 and 15 → ALLOWED; 16 → INVALID_ARGUMENT
+    @pytest.mark.parametrize("plate_len,expect_ok", [(1, True), (15, True), (16, False)])
+    def test_create_vehicle_license_plate_length(self, channel, namespace, plate_len, expect_ok):
         ...
 
 class TestConstraints:
@@ -220,7 +319,7 @@ class TestConstraints:
         ...
 ```
 
-Per-service test count estimate (sum = 156):
+Per-service test count breakdown (sum = **161**):
 
 | Service | RPCs | Happy | Error | Boundaries | Constraints | Total |
 |---|---:|---:|---:|---:|---:|---:|
@@ -230,18 +329,25 @@ Per-service test count estimate (sum = 156):
 | ChargingService | 5 | 6 | 5 | 16 | 8 | 35 |
 | ConsumptionService | 5 | 6 | 5 | 14 | 6 | 31 |
 | DisplayService | 11 | 12 | 11 | 14 | 6 | 43 |
-| (Auth enforcement) | — | — | 3 | — | — | 3 |
-| **Total** | **28** | **34** | **33** | **66** | **28** | **161** |
+| Auth enforcement (own file) | — | — | 3 | — | — | 3 |
+| **Total** | **30** | **34** | **33** | **66** | **28** | **161** |
 
-Numbers above are estimates. The actual count will land within ±10%
-once tests are written.
+**Why "Happy" > RPCs in some rows**: Vehicle/Charging/Consumption
+each have one `List*` RPC where the happy test covers both the
+"empty list" and "list with one rows" variants (`ListXxx` with no
+data → empty response; `ListXxx` after a `CreateXxx` → one row).
+Display has two `List*`-style RPCs (or similar multiple-response
+verbs) that warrant the same split. WeatherService / SourceCategory
+use `Search*` (not `List*`), which is exercised once because the
+search-success path covers both states naturally.
 
 ### 5.4 Stub generation: `scripts/gen_python_stubs.sh`
 
 ```bash
 #!/usr/bin/env bash
-# Regenerate Python gRPC stubs from proto/*.proto.
-# Re-run whenever a .proto file changes.
+# Regenerate Python gRPC stubs from proto/evgrpc/*.proto.
+# Re-run only when a .proto file changes (stubs are committed).
+# GNU sed -i (no backup arg) is fine on the dev VM (Linux).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python -m grpc_tools.protoc \
@@ -249,13 +355,99 @@ python -m grpc_tools.protoc \
     --python_out=tests/python/gen \
     --grpc_python_out=tests/python/gen \
     proto/evgrpc/*.proto
-# generated *_pb2_grpc.py uses `import evgrpc_pb2`; rewrite to relative import
-sed -i 's/^import evgrpc_pb2 as /from . import evgrpc_pb2 as /' \
-    tests/python/gen/evgrpc_pb2_grpc.py
+# Generated *_pb2_grpc.py uses `import evgrpc_pb2 as ...`; rewrite
+# to package-relative form so `from . import vehicle_pb2 as ...` works.
+sed -i 's/^import vehicle_pb2 as/from . import vehicle_pb2 as/' \
+    tests/python/gen/evgrpc/*_pb2_grpc.py
+# Generate __init__.py for the gen package and the evgrpc subpackage.
+touch tests/python/gen/__init__.py
+touch tests/python/gen/evgrpc/__init__.py
 ```
 
-The generated stubs are **committed to git** so a fresh clone needs
-only `conda env create + activate + pytest`, no `protoc` toolchain.
+Output layout (subdir preserved from proto source path):
+
+```
+tests/python/gen/
+├── __init__.py
+└── evgrpc/
+    ├── __init__.py
+    ├── common_pb2.py
+    ├── common_pb2_grpc.py
+    ├── charging_pb2.py
+    ├── charging_pb2_grpc.py
+    ├── consumption_pb2.py
+    ├── consumption_pb2_grpc.py
+    ├── display_pb2.py
+    ├── display_pb2_grpc.py
+    ├── source_category_pb2.py
+    ├── source_category_pb2_grpc.py
+    ├── vehicle_pb2.py
+    ├── vehicle_pb2_grpc.py
+    ├── weather_pb2.py
+    └── weather_pb2_grpc.py
+```
+
+Imports inside test files:
+
+```python
+from tests.python.gen.evgrpc import vehicle_pb2 as pb
+from tests.python.gen.evgrpc import vehicle_pb2_grpc as rpc
+```
+
+Stubs are **committed to git**. `scripts/gen_python_stubs.sh` is
+run only when a proto changes (re-running it is idempotent — it
+overwrites the committed files with byte-identical output if the
+proto is unchanged).
+
+### 5.5 Auth enforcement: `tests/python/test_auth_enforcement.py`
+
+Uses its own bare channel (no metadata interceptor) so each test
+can attach its own (or no) `authorization` metadata:
+
+```python
+import grpc, pytest
+from tests.python.gen.evgrpc import weather_pb2 as pb
+from tests.python.gen.evgrpc import weather_pb2_grpc as rpc
+
+def _bare_channel():
+    return grpc.insecure_channel("localhost:80")
+
+def test_no_token_returns_unauthenticated():
+    chan = _bare_channel()
+    grpc.channel_ready_future(chan).result(timeout=5)
+    stub = rpc.WeatherServiceStub(chan)
+    with pytest.raises(grpc.RpcError) as exc:
+        stub.SearchWeather(pb.SearchWeatherRequest())
+    assert exc.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+def test_malformed_token_returns_unauthenticated():
+    chan = _bare_channel()
+    grpc.channel_ready_future(chan).result(timeout=5)
+    stub = rpc.WeatherServiceStub(chan)
+    with pytest.raises(grpc.RpcError) as exc:
+        stub.SearchWeather(
+            pb.SearchWeatherRequest(),
+            metadata=(("authorization", "Bearer not.a.real.jwt"),),
+        )
+    assert exc.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+def test_forged_token_returns_unauthenticated():
+    # Build a JWT with the real IdP's `iss`/`aud` claims but sign it
+    # with a throwaway RSA key (generated per-test, never published).
+    # evgrpc's JWT validator verifies signature against the IdP's
+    # JWKS at auth-test.mksword.com, which does NOT contain this key,
+    # so the signature check fails → UNAUTHENTICATED.
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    import jwt as pyjwt  # PyJWT
+    ...
+```
+
+Forged-token test uses the `PyJWT` + `cryptography` libraries
+(already in `py312`'s default toolchain via `pip install jwt`).
+The JWT shape is built locally; signature is checked against the
+real IdP's JWKS at request time and rejected. No IdP admin change
+required.
 
 ## 6. Data flow
 
@@ -264,24 +456,31 @@ only `conda env create + activate + pytest`, no `protoc` toolchain.
 ```
 pytest collects test_vehicle.py::TestHappyPath::test_create_vehicle_returns_id_and_brand
   ├─ conftest.session fixtures resolve:
-  │     auth_token    → subprocess evgrpc-token → "eyJ..."  (50ms cache hit)
+  │     auth_token    → subprocess evgrpc-token → "eyJ..."  (~50ms cache hit)
   │     channel       → insecure_channel("localhost:80")
-  │     namespace     → "test-7f3a2b1c-"
-  │     cleanup_namespace (autouse) → yield
-  ├─ function fixture resolves:
+  │     namespace     → "7f3a2b1c"  (bare 8-hex)
+  │     cleanup_namespace (autouse):
+  │       PRE-yield: runs the children-first DELETE sweep (cleans any
+  │                  prior orphans; idempotent if no orphans exist)
+  │       yield
+  ├─ function body:
   │     TrackedInsert("vehicle") yields
-  ├─ test body:
   │     stub = rpc.VehicleServiceStub(channel)
-  │     req  = pb.CreateVehicleRequest(license_plate=f"test-{ns}{uuid}")
+  │     req  = pb.CreateVehicleRequest(
+  │                license_plate=make_license_plate("7f3a2b1c"),
+  │                ...
+  │            )
   │     resp = stub.CreateVehicle(req)             # gRPC call through nginx:80
   │     ti.register("vehicle", resp.id)
-  ├─ test asserts pass
+  │     assert resp.brand == req.brand
   ├─ TrackedInsert.__exit__: DELETE FROM vehicle WHERE id = '<resp.id>'
-  └─ (other tests run…)
-  └─ last test finishes → cleanup_namespace post-yield runs:
-        DELETE FROM vehicle WHERE license_plate LIKE 'test-7f3a2b1c-%'
-        DELETE FROM weather WHERE name LIKE 'test-7f3a2b1c-%'
-        ... (per table)
+  ├─ (other tests run, each does its own TrackedInsert cycle)
+  └─ session ends → cleanup_namespace post-yield runs:
+        DELETE FROM consumption WHERE remark LIKE 'test-%'
+        DELETE FROM charging    WHERE location LIKE 'test-%' OR remark LIKE 'test-%'
+        DELETE FROM vehicle     WHERE license_plate LIKE 'test-%'
+        DELETE FROM weather     WHERE name LIKE 'test-%'
+        DELETE FROM source_category WHERE name LIKE 'test-%'
 ```
 
 ### 6.2 Server-unreachable handling
@@ -290,20 +489,25 @@ pytest collects test_vehicle.py::TestHappyPath::test_create_vehicle_returns_id_a
 pytest collects first test
   ├─ conftest.session fixture `channel` resolves
   │     insecure_channel("localhost:80")
-  │     grpc.channel_ready_future(chan).result(timeout=5)  # raises DeadlineExceeded
+  │     grpc.channel_ready_future(chan).result(timeout=5)  # raises FutureTimeoutError
   │     pytest.skip("evgrpc:80 unreachable, skipping Python gRPC IT")
   └─ all tests in session skipped (count = 0, exit 0)
 ```
 
-### 6.3 Cleanup layers (C3)
+If `auth_token` fails first (e.g. IdP unreachable), the same skip
+path applies with a different message.
 
-| Layer | Trigger | Mechanism | Failure mode |
+### 6.3 Cleanup layers
+
+| Layer | Trigger | Mechanism | Catches |
 |---|---|---|---|
-| L1 per-function | `TrackedInsert.__exit__` | `DELETE FROM <t> WHERE id = ANY(<ids>)` | If exception in test body, still runs in `__exit__` (context manager) |
-| L2 per-session | `cleanup_namespace` post-yield | `DELETE FROM <t> WHERE <idcol> LIKE 'test-<ns>%'` (via `psycopg`) | Catches anything L1 missed (e.g. test crash before L1) |
+| L1 per-function | `TrackedInsert.__exit__` | `DELETE FROM <t> WHERE id = ANY(<ids>)` | clean exits + pytest exceptions (context manager always runs `__exit__`) |
+| L2a session-start | `cleanup_namespace` pre-yield | `DELETE ... WHERE <col> LIKE 'test-%'` (children-first) | orphans from SIGKILL/OOM/power-loss in prior runs |
+| L2b session-end | `cleanup_namespace` post-yield | same sweep, wrapped in `try/except Exception` so cleanup failures never mask test results | any rows this session forgot to clean up |
 
-If the dev DB is somehow polluted from a prior broken run, the
-session-end DELETE also catches it as long as the prefix is the same.
+The pre-yield sweep happens before the first test runs, so even if
+a prior session crashed mid-test, the next invocation sees a clean
+slate. The post-yield sweep is best-effort (logged, not fatal).
 
 ### 6.4 Auth flow
 
@@ -321,8 +525,9 @@ test body calls stub.CreateVehicle(req)
                       └─ signature fails verification   → UNAUTHENTICATED
 ```
 
-Tests `TestAuthEnforcement::test_*` make unauthenticated calls (no
-metadata interceptor applied) and assert `UNAUTHENTICATED`.
+`TestAuthEnforcement::test_*` makes unauthenticated or
+attacker-signed calls (no metadata interceptor; explicit
+`metadata=`) and asserts `UNAUTHENTICATED`.
 
 ## 7. File / directory layout
 
@@ -331,19 +536,21 @@ metadata interceptor applied) and assert `UNAUTHENTICATED`.
 ├── proto/evgrpc/*.proto          # existing, source of truth
 ├── tests/python/                  # NEW
 │   ├── __init__.py                # empty
-│   ├── conftest.py                # session fixtures (5.1)
-│   ├── _helpers.py                # TrackedInsert + name builders (5.2)
-│   ├── test_weather.py            # per-service test files (5.3)
+│   ├── conftest.py                # session fixtures (§5.1)
+│   ├── _helpers.py                # TrackedInsert + name builders (§5.2)
+│   ├── test_weather.py            # per-service test files (§5.3)
 │   ├── test_vehicle.py
 │   ├── test_source_category.py
 │   ├── test_charging.py
 │   ├── test_consumption.py
 │   ├── test_display.py
-│   ├── test_auth_enforcement.py   # auth-layer tests (§6.4)
-│   └── gen/                       # generated, committed
+│   ├── test_auth_enforcement.py   # auth-layer tests (§5.5)
+│   └── gen/                       # generated, committed (§5.4)
 │       ├── __init__.py
-│       ├── evgrpc_pb2.py
-│       └── evgrpc_pb2_grpc.py
+│       └── evgrpc/
+│           ├── __init__.py
+│           ├── *_pb2.py
+│           └── *_pb2_grpc.py
 ├── scripts/gen_python_stubs.sh    # NEW
 ├── environment.yml                # NEW
 └── run_all_tests.sh               # modified: append Python stage
@@ -353,42 +560,70 @@ metadata interceptor applied) and assert `UNAUTHENTICATED`.
 
 ### 8.1 Namespace generation
 
-`namespace` fixture returns `test-{uuid.uuid4().hex[:8]}-`. Example:
-`test-7f3a2b1c-`. Two parallel pytest runs (in different terminals)
-will have different prefixes and not collide.
+`namespace` fixture returns `uuid.uuid4().hex[:8]` (8-char bare hex,
+e.g. `7f3a2b1c`). Two parallel pytest runs (in different
+terminals) get different prefixes and cannot collide. The
+`test-` prefix is added by the `make_*` helpers in §5.2, never by
+the namespace fixture.
 
 ### 8.2 Field-level application
 
-| Table | Field used for namespace prefix | Cleanup `LIKE` clause |
+All `make_*` outputs start with `test-` so the cleanup `LIKE
+'test-%'` pattern matches across all tables.
+
+| Table | Cleanup `LIKE` field(s) | Length budget |
 |---|---|---|
-| vehicle | `LicensePlate` | `WHERE license_plate LIKE 'test-<ns>%'` |
-| weather | `Name` | `WHERE name LIKE 'test-<ns>%'` |
-| source_category | `Name` | `WHERE name LIKE 'test-<ns>%'` |
-| charging | `Location` (or `Remark`) | `WHERE location LIKE 'test-<ns>%' OR remark LIKE 'test-<ns>%'` |
-| consumption | `Remark` | `WHERE remark LIKE 'test-<ns>%'` |
+| vehicle | `license_plate` | VARCHAR(15) — `make_license_plate` returns exactly 15 chars |
+| weather | `name` | VARCHAR(36) — `make_weather_name` returns 29 chars |
+| source_category | `name` | VARCHAR(36) — `make_source_category_name` returns 29 chars |
+| charging | `location` OR `remark` | VARCHAR(100) / TEXT — `make_charging_location` returns 25 chars; tests may also populate `remark` |
+| consumption | `remark` | `make_consumption_remark` returns 25 chars; tests must populate `Remark` to be cleaned by L2a/L2b sweep |
 
-For tables whose primary identifier (UUID) is server-generated and
-not human-readable, we use the **only** human-readable VARCHAR column
-available. This is why the cleanup `LIKE` clause is on `license_plate`,
-`name`, `location`, `remark` — not on `Id`.
+**Discipline**: tests that create `charging` rows must set
+`Location` (and may set `Remark`); tests that create `consumption`
+rows must set `Remark`. The `make_*` helpers exist precisely to
+make this one-line. A linter rule or test-side assertion that
+created-row helpers always return non-empty is out of scope for
+v1; if a future bug shows up where a `charging` row's `Location` is
+NULL, that's a test-writer omission and the post-yield sweep will
+silently leave it (logged).
 
-### 8.3 FK-cascade risk
+### 8.3 FK-cascade ordering (canonical, applies to both L2a and L2b)
 
-If a test inserts a `vehicle` with a `test-<ns>-` `license_plate`,
-and a subsequent test inserts a `charging` row referencing that
-vehicle, then the per-session cleanup deletes `vehicle` rows first
-→ cascade deletes `charging` → `cleanup_namespace` then tries to
-`DELETE FROM charging WHERE location LIKE 'test-<ns>%'` and finds 0
-rows. Harmless.
+Schema FKs are bare `REFERENCES vehicle(Id)` / `weather(Id)` /
+`source_category(Id)` with **no `ON DELETE` clause** (verified
+against `sql/001_initial.sql`). PostgreSQL default for unspecified
+FK delete behavior is `NO ACTION`, which is functionally equivalent
+to `RESTRICT` for the immediate constraint check: the parent row
+cannot be deleted if any child row references it.
 
-To keep cleanup deterministic, the order is:
-1. `DELETE FROM consumption WHERE ...` (depends on vehicle, weather)
-2. `DELETE FROM charging WHERE ...` (depends on vehicle, source_category)
-3. `DELETE FROM vehicle WHERE ...`
-4. `DELETE FROM weather WHERE ...`
-5. `DELETE FROM source_category WHERE ...`
+This makes **children-first** the only correct cleanup order:
 
-This handles FK cascades cleanly.
+1. `DELETE FROM consumption WHERE remark LIKE 'test-%'`
+   — `consumption` depends on `vehicle` and `weather`.
+2. `DELETE FROM charging WHERE location LIKE 'test-%' OR remark LIKE 'test-%'`
+   — `charging` depends on `vehicle` and `source_category`.
+3. `DELETE FROM vehicle WHERE license_plate LIKE 'test-%'`
+   — only after both `consumption` and `charging` are emptied.
+4. `DELETE FROM weather WHERE name LIKE 'test-%'`
+   — only after `consumption` is emptied.
+5. `DELETE FROM source_category WHERE name LIKE 'test-%'`
+   — only after `charging` is emptied.
+
+Parents-first order (the v1 §4 mistake) would fail at step 3 with
+a `foreign_key_violation` from PG. The pre-yield sweep catches
+this scenario and surfaces it as a pytest collection error if the
+sweep itself raises — but the sweep ordering is now correct, so
+this won't happen in practice.
+
+### 8.4 Token cache (parallel runs)
+
+`/tmp/evgrpc_token.json` is the default cache for `evgrpc-token`.
+For parallel pytest invocations against the same dev box, set
+`EVGRPC_CACHE` to a per-process path (e.g. via pytest's
+`--env-files` or a `conftest.py` shim that derives from `os.getpid`)
+to avoid concurrent refresh races. The default shared cache is
+fine for the typical single-process pytest run.
 
 ## 9. Run / CI integration
 
@@ -398,11 +633,17 @@ This handles FK cascades cleanly.
 cd /data/Repositories/evGRpc
 conda env create -f environment.yml          # one-time
 conda activate evgrpc-tests
-bash scripts/gen_python_stubs.sh             # only if proto changed
-pytest tests/python/ -v                      # full run, ~60s
+pytest tests/python/ -v                      # full run, ~105s
 pytest tests/python/test_vehicle.py -v       # single file
 pytest tests/python/ -v -k boundaries        # by class
 pytest tests/python/ -v --tb=long            # for failure debugging
+```
+
+If a `.proto` file changes:
+
+```bash
+bash scripts/gen_python_stubs.sh
+git add tests/python/gen/ && git commit
 ```
 
 ### 9.2 `run_all_tests.sh` addition
@@ -425,32 +666,41 @@ dependencies:
   - pip
   - pytest>=8.0
   - protobuf>=5.0
-  - psycopg[binary]>=3.1
   - pip:
       - grpcio>=1.60
       - grpcio-tools>=1.60
+      - psycopg[binary]>=3.1
+      - pyjwt>=2.8
+      - cryptography>=42.0
 ```
 
-Note: `grpcio` is installed via pip (not conda-forge) because the
-conda-forge build lags and has historically had abseil-cpp
-compatibility issues.
+Notes:
+- `grpcio` is installed via pip (not conda-forge) because the
+  conda-forge build lags and has historically had abseil-cpp
+  compatibility issues. Same for `psycopg[binary]` (conda-forge's
+  `psycopg` lacks the `[binary]` extras — the bracketed form is
+  pip-extras syntax).
+- `pyjwt` and `cryptography` are needed for the forged-token
+  auth test (§5.5).
 
 ## 10. Out of scope / future work
 
 - **RBAC / per-RPC scope enforcement.** Add when server grows scope
   checking; the test harness already supports `metadata=` overrides
-  per call via the channel interceptor.
+  per call.
 - **Coverage report (`pytest-cov`).** Not requested; deferred.
-- **Parallel execution (`pytest-xdist`).** With ~150 tests × 0.6s =
-  90s serial, parallelism adds setup complexity for marginal speed.
-  Revisit if runtime becomes a problem.
+- **Parallel execution (`pytest-xdist`).** With 161 tests × 0.65s
+  ≈ 105s serial, parallelism adds setup complexity for marginal
+  speed. Revisit if runtime becomes a problem.
 - **CI workflow file (`github-actions.yml` or similar).** Out of
-  scope for this spec; the user runs tests locally via
-  `run_all_tests.sh`.
+  scope; the user runs tests locally via `run_all_tests.sh`.
 - **Pyright / mypy static analysis.** Out of scope; pytest + runtime
   checks are the v1 bar.
 - **Auto-start of `docker compose`.** Users run docker-compose
   manually before pytest.
+- **Expired-token test.** Requires a dedicated IdP client with
+  short token lifetime (admin UI change). Add when a second
+  use case for short-lived tokens appears.
 
 ## 11. Open questions
 
@@ -460,9 +710,13 @@ None — all design decisions resolved during brainstorming.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `evgrpc-token` subprocess hangs | Low | 15s timeout via `subprocess.run(..., timeout=15)`; cache fallback |
-| docker-compose stack down mid-test | Low | Session-skip on `channel_ready_future` timeout |
-| Test pollutes dev DB despite prefix | Low | Double-layer cleanup (function + session); rollback TRUNCATE if needed |
-| Generated stubs drift from proto | Medium | `scripts/gen_python_stubs.sh` always re-runnable; CI gate to check |
-| New RPC added without test | Low (v1) | Per-RPC checklist; deferred to a future "spec gate" workflow |
+| `evgrpc-token` subprocess hangs | Low | 15s timeout via `subprocess.run(..., timeout=15)` |
+| `evgrpc-token` subprocess fails (IdP down) | Low | `pytest.skip` with clear message — same as channel fixture |
+| docker-compose stack down mid-test | Low | Session-skip on `grpc.FutureTimeoutError` |
+| Test pollutes dev DB despite prefix | Low | Triple-layer cleanup (L1 function + L2a session-start + L2b session-end) |
+| Orphan rows from SIGKILL/OOM | Low | Session-start sweep catches on next pytest invocation |
+| Generated stubs drift from proto | Medium | `scripts/gen_python_stubs.sh` always re-runnable; pre-commit hook (out of scope) would gate |
+| New RPC added without test | Low (v1) | Per-RPC checklist during code review; deferred to a future "spec gate" workflow |
 | `psycopg` direct-DB access for cleanup | Low | Acceptable per spec §4 — test code, test DB |
+| Token cache race in parallel pytest | Low | `EVGRPC_CACHE` env var documented for per-process isolation |
+| Test forgets to set `Remark` on consumption | Low | L2 sweep silently leaves the row; logged in post-yield report |
