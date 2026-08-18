@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ChargingService
 - **RPCs:** CreateCharging, GetCharging, UpdateCharging, DeleteCharging, ListChargings
-- **Total tests:** 16
+- **Total tests:** 17
 - **FK deps:** every Create/Update requires a valid vehicle_id + source_category_id (UUID).
 
 ## TestHappyPath
@@ -56,6 +56,9 @@
 
 ### test_create_charging_location_length
 - **VARCHAR(100):** 101-char location → data_exception → INVALID_ARGUMENT.
+
+### test_create_charging_location_at_limit_ok
+- **VARCHAR(100):** 100-char location at limit → OK + echoed with len 100.
 
 ## TestConstraints
 

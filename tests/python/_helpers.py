@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import uuid
-from contextlib import contextmanager
-from typing import Iterable
 
 import psycopg
 
@@ -13,11 +10,27 @@ import psycopg
 class TrackedInsert:
     """Per-function cleanup (L1).
 
-    Usage:
+    CRITICAL usage note: any read/Update RPC that depends on a row created
+    earlier in the same block MUST run INSIDE the `with` block. Otherwise
+    `__exit__` deletes the row before the read RPC runs, and the read
+    returns NOT_FOUND.
+
+    Canonical pattern (create + read inside block):
         with TrackedInsert(pg_conn, "vehicle") as ti:
-            resp = stub.CreateVehicle(req)
-            ti.register(resp.id)
-        # __exit__ runs: DELETE FROM vehicle WHERE id = ANY(<ids>)
+            created = stub.CreateVehicle(req)
+            ti.register(created.id)
+            got = stub.GetVehicle(pb.GetVehicleRequest(id=created.id))  # inside!
+        assert got.id == created.id
+
+    For delete tests, use `ti.unregister(id)` after the Delete RPC:
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            created = stub.CreateVehicle(req)
+            ti.register(created.id)
+            stub.DeleteVehicle(pb.DeleteVehicleRequest(id=created.id))
+            ti.unregister(created.id)  # skip L1 cleanup (already deleted)
+        # then assert GetVehicle returns NOT_FOUND
+
+    `__exit__` runs: DELETE FROM <table> WHERE id = ANY(<ids>).
     """
 
     def __init__(self, pg_conn, table: str):

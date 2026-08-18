@@ -15,7 +15,6 @@ import pytest
 
 from tests.python._helpers import (
     TrackedInsert,
-    make_consumption_remark,
     make_license_plate,
     make_uuid,
     make_weather_name,

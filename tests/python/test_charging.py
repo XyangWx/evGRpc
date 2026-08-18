@@ -1,4 +1,4 @@
-"""ChargingService: 5 RPCs — ~20 tests.
+"""ChargingService: 5 RPCs — 17 tests.
 
 RPCs: CreateCharging, GetCharging, UpdateCharging, DeleteCharging, ListChargings.
 
@@ -7,7 +7,6 @@ FK dependencies: requires a valid vehicle_id + source_category_id (UUID).
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta
 
 import grpc
@@ -15,10 +14,8 @@ import pytest
 
 from tests.python._helpers import (
     TrackedInsert,
-    make_charging_location,
-    make_consumption_remark,
-    make_source_category_name,
     make_license_plate,
+    make_source_category_name,
     make_uuid,
 )
 from tests.python.gen.evgrpc import charging_pb2 as pb
@@ -66,7 +63,7 @@ def _make_charging_req(vehicle_id, source_category_id, **overrides):
         electricity_unit_price=1.10,
         charger_type=pb.CHARGER_TYPE_FAST,
         source_category_id=source_category_id,
-        location="test-loc",
+        location="test-loc-default",  # tests override this; VARCHAR(100) accepts
         remark="test-rem",
     )
     for k, v in overrides.items():
@@ -264,7 +261,7 @@ class TestBoundaries:
     def test_create_charging_location_length(
         self, channel, namespace, pg_conn, vehicle_and_source
     ):
-        """VARCHAR(100): 100 = OK, 101 = INVALID_ARGUMENT."""
+        """VARCHAR(100): 100-char location = OK; 101-char = INVALID_ARGUMENT."""
         stub = rpc.ChargingServiceStub(channel)
         vid, scid = vehicle_and_source
         # 101-char location (just over limit)
@@ -273,6 +270,18 @@ class TestBoundaries:
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateCharging(req)
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_create_charging_location_at_limit_ok(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """VARCHAR(100): 100-char location = OK (at limit)."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        loc = "x" * 100
+        with TrackedInsert(pg_conn, "charging") as ti:
+            resp = stub.CreateCharging(_make_charging_req(vid, scid, location=loc))
+            ti.register(resp.id)
+        assert len(resp.location) == 100
 
 
 # ─────────────────────────── TestConstraints ───────────────────────────
