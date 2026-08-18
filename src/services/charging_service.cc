@@ -82,6 +82,14 @@ grpc::Status ValidateCharging(const CreateChargingRequest* req) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "cost must be > 0");
   }
+  // ChargerType must be a valid enum value (FAST or SLOW). UNSPECIFIED
+  // (= 0) is the proto3 default and not a real value; binding it to the
+  // DB enum column would fail with NOT NULL (because ChargerTypeLabel
+  // returns '' for UNSPECIFIED).
+  if (req->charger_type() == ChargerType::CHARGER_TYPE_UNSPECIFIED) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "charger_type must be FAST or SLOW (not UNSPECIFIED)");
+  }
   return grpc::Status::OK;
 }
 
