@@ -50,6 +50,40 @@ EVGRPC_TEST_DB_PASSWORD=… ./build/tests/integration/evgrpc_e2e_tests
 - The e2e tests truncate `vehicle ... CASCADE` at the start, so they're
   re-runnable without manual cleanup.
 
+## Python Integration Tests (gRPC client-side)
+
+A pytest-based client-side integration test suite (`tests/python/`)
+hits the docker-compose stack (`nginx:80 → evgrpc:50051 → Postgres`)
+via the Bearer-token helper (`evgrpc-token` CLI). 99 tests cover happy
+paths, error paths, data boundaries, UNIQUE + FK constraints, and auth
+enforcement for all 6 services.
+
+**One-command setup:**
+
+```sh
+conda env create -f environment.yml   # creates `evgrpc-tests` env
+bash scripts/gen_python_stubs.sh     # regenerate protoc stubs (committed)
+```
+
+**Run:**
+
+```sh
+conda run -n evgrpc-tests pytest tests/python/ -v
+```
+
+**Per-test rationale** in `tests/python/doc/<service>.md` (one section
+per test, per spec Goal 11). MD ↔ code alignment is enforced by a
+Python check that strips parametrize `[...]` suffixes.
+
+**Test isolation:** session-unique 8-hex `namespace` prefix + double
+sweep (L1 per-function `TrackedInsert`, L2 session-start + session-end
+sweep via `sweep_all_test_rows`). Children-first deletion order
+respects FK NO ACTION:
+`consumption → charging → vehicle → weather → source_category`.
+
+The suite is wired into `./scripts/run_all_tests.sh` as suite 4
+(between e2e and coverage gate).
+
 ## Coverage
 
 Run the integration test suite with coverage instrumentation:
