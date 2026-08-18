@@ -153,7 +153,7 @@ behavior-driven test additions.
    `vehicle.Id`, `consumption.WeatherId` → `weather.Id`,
    `charging.VehicleId` → `vehicle.Id`,
    `charging.SourceCategoryId` → `source_category.Id` — insert with
-   non-existent parent, expect `FAILED_PRECONDITION`.
+   non-existent parent, expect `INVALID_ARGUMENT` (per `src/db/error.cc`: `foreign_key_violation` → `INVALID_ARGUMENT`).
 6. **Auth enforcement tests** at the gRPC layer:
    - no token → `UNAUTHENTICATED`
    - malformed token → `UNAUTHENTICATED`

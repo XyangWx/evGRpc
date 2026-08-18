@@ -333,6 +333,17 @@ class TrackedInsert:
     def register(self, id: str) -> None:
         self._ids.append(id)
 
+    def unregister(self, id: str) -> None:
+        """Remove a previously-registered id from cleanup tracking.
+
+        Use after deleting the row via the RPC, to avoid a redundant DELETE
+        in __exit__ (which would either be a no-op or a unique-fk violation).
+        """
+        try:
+            self._ids.remove(id)
+        except ValueError:
+            pass
+
     def __enter__(self) -> "TrackedInsert":
         return self
 
@@ -831,7 +842,7 @@ class TestHappyPath:
             created = stub.CreateVehicle(req)
             ti.register(created.id)
             stub.DeleteVehicle(pb.DeleteVehicleRequest(id=created.id))
-            ti._ids.remove(created.id)  # already deleted, skip L1 cleanup
+            ti.unregister(created.id)  # already deleted, skip L1 cleanup
         with pytest.raises(grpc.RpcError) as exc:
             stub.GetVehicle(pb.GetVehicleRequest(id=created.id))
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
@@ -1040,7 +1051,7 @@ class TestConstraints:
 
         Setup: create vehicle V, create consumption C referencing V.
         Action: DeleteVehicle(V).
-        Expected: FAILED_PRECONDITION.
+        Expected: INVALID_ARGUMENT (per src/db/error.cc: FK violation → INVALID_ARGUMENT).
         """
         # NOTE: this test crosses services. It needs consumption service to
         # exist. The test for that lives in Chunk 6; mark this test
@@ -1112,7 +1123,7 @@ git commit -m "test(pytest): SourceCategoryService tests + per-test MD"
 Pattern from Task 2.1, extended with:
 - Helper `_make_charging_req(ns, vehicle_id, source_category_id)` for FK-dependent CreateCharging tests
 - TestBoundaries: KwhCharged DECIMAL(10,2), Cost DECIMAL(10,2), ElectricityUnitPrice DECIMAL(4,2), ServiceFee DECIMAL(5,2), ChargerType enum (fast/slow), Location VARCHAR(100)
-- TestConstraints: FK violations for VehicleId (orphan) and SourceCategoryId (orphan) → FAILED_PRECONDITION
+- TestConstraints: FK violations for VehicleId (orphan) and SourceCategoryId (orphan) → INVALID_ARGUMENT (per src/db/error.cc: foreign_key_violation → INVALID_ARGUMENT, not FAILED_PRECONDITION)
 
 - [ ] **Step 2: Write the MD** (one section per test, plus per parametrize ID)
 
@@ -1142,7 +1153,7 @@ git commit -m "test(pytest): ChargingService tests + per-test MD"
 Pattern from Task 2.1, extended with:
 - Helper to ensure both vehicle + weather exist before consumption
 - TestBoundaries: BeginPercent / EndPercent (0-100), temperatures DECIMAL(4,1), mileage/range INT
-- TestConstraints: FK violations for VehicleId, WeatherId → FAILED_PRECONDITION
+- TestConstraints: FK violations for VehicleId, WeatherId → INVALID_ARGUMENT (per src/db/error.cc: foreign_key_violation → INVALID_ARGUMENT, not FAILED_PRECONDITION)
 
 - [ ] **Step 2: Write the MD**
 
