@@ -1,117 +1,13 @@
-# ============================================
-# C++ / CMake / Ninja / gRPC gitignore
-# ============================================
-
-# Build output directories
-build/
-cmake-build-*/
-out/
-bin/
-lib/
-
-# CMake artifacts
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-install_manifest.txt
-CTestTestfile.cmake
-Testing/
-_deps/
-compile_commands.json
-CMakeUserPresets.json
-
-# Ninja artifacts
-.ninja_deps
-.ninja_log
-build.ninja
-.ninja_*
-
-# Compiled object & binaries
-*.o
-*.obj
-*.lo
-*.a
-*.lib
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
-*.so.*
-*.dylib
-*.dll
-*.exe
-*.out
-*.app
-*.ko
-*.slo
-*.la
 
-# Precompiled headers
-*.gch
-*.pch
+# pytest
+.pytest_cache/
 
-# Protobuf / gRPC generated code
-*.pb.cc
-*.pb.h
-*.pb.go
-*.pb.py
-*.grpc.pb.cc
-*.grpc.pb.h
-
-# Dependency files (gcc -MD)
-*.d
-
-# Test & coverage
-*.gcno
-*.gcda
-*.gcov
-coverage.out
-*.cover
-.coverage
-htmlcov/
-Testing/
-
-# Runtime + test logs (production server writes ./log/evgrpc.log;
-# unit tests write ./log/test_*.log; both go to ./log/)
-log/*
-
-# Valgrind
-vgcore.*
-
-# ccache
-.ccache/
-*.ccache-*
-
-# IDE / Editor
+# IDE
 .vscode/
 .idea/
-.vs/
 *.swp
-*.swo
-*~
-*.sublime-project
-*.sublime-workspace
-.cache/
-.project
-.cproject
-
-# Docker (keep Dockerfile, ignore local image state)
-docker-compose.override.yml
-
-# Secrets / local config
-.env
-.env.*
-*.pem
-*.key
-credentials.json
-secrets.yaml
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-ehthumbs.db
-
-# Logs
-*.log
-logs/
-
-# superpowers skill ephemeral state (per-worktree)
-.superpowers/
