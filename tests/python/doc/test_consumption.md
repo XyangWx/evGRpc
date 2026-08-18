@@ -66,9 +66,7 @@
 - **FK violation** (weather.Id doesn't exist) → INVALID_ARGUMENT.
 
 ### test_create_consumption_empty_weather_id_returns_invalid
-- **Production bug discovered:** WeatherId column is nullable in DB (`sql/001_initial.sql:39`), but production code binds `$13` as raw string. Empty string fails UUID cast → INVALID_ARGUMENT.
-- The SQL comment claims NULLIF('') wrap, but the actual SQL is `$13` only.
-- Test documents current behavior. Fixing production (changing SQL to `$13::text NULLIF ...`) is out of scope; when fixed, this test should be updated to expect OK + response with weather_id="" or similar.
+- **App validation (Phase 3 fix):** `ValidateConsumption` now rejects empty weather_id with INVALID_ARGUMENT. WeatherId is NOT NULL in the DB schema, so the empty string would otherwise hit NOT NULL and produce INTERNAL via the `not_null_violation` → INTERNAL fallback in error.cc.
 
 ## Cross-service (Chunk 6 enables Vehicle FK-delete test)
 

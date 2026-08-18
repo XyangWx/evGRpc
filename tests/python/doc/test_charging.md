@@ -83,11 +83,5 @@
 ### test_create_charging_invalid_source_category_id_returns_invalid_argument
 - **FK violation** (source_category.Id doesn't exist) → INVALID_ARGUMENT.
 
-### test_create_charging_charger_type_unspecified_uses_default
-- **UNSPECIFIED enum (0)** — surprising behavior:
-  - `ChargerTypeLabel(UNSPECIFIED)` returns `''`.
-  - PG enum cast `$N::charger_type_enum` of `''` is NULL.
-  - NULL hits `chargertype NOT NULL` constraint → `not_null_violation`.
-  - `not_null_violation` is NOT a subclass of `data_exception` in libpqxx.
-  - `error.cc` falls through to default → INTERNAL.
-- Documents current production behavior. Should ideally be `INVALID_ARGUMENT` (production should validate enum) but changing error.cc is out of scope.
+### test_create_charging_charger_type_unspecified_returns_invalid
+- **App validation (Phase 3 fix):** `ValidateCharging` rejects UNSPECIFIED with INVALID_ARGUMENT. Without this, ChargerTypeLabel('') → NOT NULL violation → INTERNAL (far less helpful).

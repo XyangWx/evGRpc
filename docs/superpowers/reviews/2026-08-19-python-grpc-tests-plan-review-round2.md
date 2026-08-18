@@ -38,20 +38,19 @@ assert got.id == created.id
 
 **Alternative design (not adopted):** A nested context manager `with TrackedInsert.read(...)` that explicitly models the read-after-write pattern. Decided the docstring is sufficient for now.
 
-### 2. Production bugs discovered by tests (NOT fixed — out of scope)
+### 2. Production bugs discovered by tests (FIXED in Phase 3)
 
-These are real bugs. Tests document current behavior so a future fix can update them.
+These bugs were found by tests within the first 2 hours of implementation:
 
-| # | Bug | Test | Status |
+| # | Bug | Test | Fix (Phase 3) |
 |---|---|---|---|
-| 2a | `ConsumptionService.CreateConsumption` empty `weather_id` → INVALID_ARGUMENT | `test_create_consumption_empty_weather_id_returns_invalid` | Documented |
-| 2b | `ChargingService.CreateCharging` ChargerType UNSPECIFIED → INTERNAL | `test_create_charging_charger_type_unspecified_uses_default` | Documented |
-| 2c | `DisplayService.GetVehicleCostSummary` no-data → INTERNAL ("no aggregate row") | `test_get_vehicle_cost_summary_no_data_returns_internal` | Documented |
+| 2a | `ConsumptionService.CreateConsumption` empty `weather_id` → INTERNAL (not_null_violation) | `test_create_consumption_empty_weather_id_returns_invalid` | App-level validation: `if (req->weather_id().empty()) return INVALID_ARGUMENT(...)` in `ValidateConsumption` |
+| 2b | `ChargingService.CreateCharging` ChargerType UNSPECIFIED → INTERNAL (not_null_violation) | `test_create_charging_charger_type_unspecified_returns_invalid` | App-level validation in `ValidateCharging` |
+| 2c | `DisplayService.GetVehicleCostSummary`, `GetMonthlyReport`, `GetAnnualReport` no-data → INTERNAL ("no aggregate row") | `test_get_vehicle_cost_summary_no_data_returns_invalid` | Changed `INTERNAL` → `INVALID_ARGUMENT` in 6 places (the EXISTS pre-check branches) |
 
-**Fix sketches (out of scope):**
-- 2a: change SQL to `WeatherId = NULLIF($13, '')::uuid` (the SQL comment already claims this — the actual code doesn't do it).
-- 2b: add app-level validation: `if (req.charger_type() == CHARGER_TYPE_UNSPECIFIED) return INVALID_ARGUMENT(...)` before INSERT. OR add `not_null_violation` → `INVALID_ARGUMENT` mapping in `error.cc`.
-- 2c: remove the EXISTS pre-check; rely on the COALESCE(SUM, 0) → zeros on empty. Or change `INTERNAL` to `INVALID_ARGUMENT` for the "no aggregate row" case.
+**Why these fixes matter:**
+- The original tests caught them, but the tests documented (and enforced) the wrong behavior. Production code's "INTERNAL" was confusing — the user-facing semantics should be "your query returned no data" (INVALID_ARGUMENT), not "the server crashed" (INTERNAL).
+- After the Production code fix, the tests were updated to expect the new (correct) behavior. The test names were also updated to reflect intent (`..._returns_invalid` instead of `..._uses_default`).
 
 ---
 

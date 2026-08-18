@@ -17,8 +17,8 @@
 ### test_get_annual_charging_report_empty_returns_zeros
 - v1.1.0 RPC → all zeros, month=0 (annual indicator).
 
-### test_get_vehicle_cost_summary_no_data_returns_internal
-- **Documents production behavior:** EXISTS pre-check fires INTERNAL ("no aggregate row") when filter matches zero rows. Pre-dates v1.1.0 pattern. Cannot test "no data → zero totals" path without seeding.
+### test_get_vehicle_cost_summary_no_data_returns_invalid
+- **Phase 3 fix:** EXISTS pre-check now fires INVALID_ARGUMENT ("no aggregate row") instead of INTERNAL when filter matches zero rows. The v1.1.0 RPCs (Daily/Monthly/AnnualChargingReport) handle this case with COALESCE-on-empty-set and return zeros; the legacy GetVehicleCostSummary prefers a clear INVALID_ARGUMENT over silent zeros.
 
 ### test_get_vehicle_cost_summary_empty_vehicle_id_returns_invalid
 - Validator: vehicle_id is required → INVALID_ARGUMENT.
