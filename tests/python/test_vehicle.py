@@ -299,8 +299,53 @@ class TestConstraints:
         Expected: INVALID_ARGUMENT (per src/db/error.cc: foreign_key_violation
         → INVALID_ARGUMENT, not FAILED_PRECONDITION).
 
-        NOTE: This test crosses services. It requires consumption service
-        tests (Chunk 6) to be in place. Marked `@pytest.mark.skip` until
-        Chunk 6 lands, then remove the skip.
+        Cross-service test: depends on ConsumptionService existing
+        (Chunk 6 enables it). Enabled 2026-08-19.
         """
-        pytest.skip("consumption service not yet tested (Chunk 6); enable after Chunk 6")
+        from tests.python.gen.evgrpc import consumption_pb2 as c_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as c_rpc
+        from tests.python.gen.evgrpc import weather_pb2 as w_pb
+        from tests.python.gen.evgrpc import weather_pb2_grpc as w_rpc
+        from datetime import datetime, timedelta
+        from tests.python._helpers import make_license_plate, make_weather_name
+
+        v_stub = rpc.VehicleServiceStub(channel)
+        c_stub = c_rpc.ConsumptionServiceStub(channel)
+        w_stub = w_rpc.WeatherServiceStub(channel)
+
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti:
+            plate = make_license_plate(namespace)
+            v = v_stub.CreateVehicle(pb.CreateVehicleRequest(
+                brand="test-brand",
+                calibrated_range_km=400,
+                battery_capacity_kwh=75.0,
+                purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+                license_plate=plate,
+            ))
+            v_ti.register(v.id)
+            w_name = make_weather_name(namespace)
+            w = w_stub.CreateWeather(w_pb.CreateWeatherRequest(name=w_name))
+            w_ti.register(w.id)
+
+            # Create consumption referencing V (FK to vehicle).
+            start = datetime(2024, 6, 15, 10, 0, 0)
+            c = c_stub.CreateConsumption(c_pb.CreateConsumptionRequest(
+                vehicle_id=v.id,
+                start=start,
+                end=start + timedelta(hours=2),
+                begin_percent=80, end_percent=40,
+                begin_mileage_km=100, end_mileage_km=200,
+                begin_range_km=320, end_range_km=160,
+                highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                weather_id=w.id,
+                remark="fk-test",
+            ))
+
+            with TrackedInsert(pg_conn, "consumption") as c_ti:
+                c_ti.register(c.id)
+                # Try to delete the vehicle (FK violation expected).
+                with pytest.raises(grpc.RpcError) as exc:
+                    v_stub.DeleteVehicle(pb.DeleteVehicleRequest(id=v.id))
+                assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+                # Vehicle NOT deleted; cleanup will remove it normally.
