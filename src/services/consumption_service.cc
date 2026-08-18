@@ -75,6 +75,13 @@ grpc::Status ValidateConsumption(const CreateConsumptionRequest* req) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "highest_temperature_c must be >= lowest_temperature_c");
   }
+  // weather_id is NOT NULL in the DB schema; reject empty string at
+  // app level so the user gets a clear INVALID_ARGUMENT instead of
+  // the SQL not_null_violation → INTERNAL (per error.cc).
+  if (req->weather_id().empty()) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "weather_id is required (cannot be empty)");
+  }
   return grpc::Status::OK;
 }
 
@@ -111,7 +118,7 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
         "BeginRange, EndRange, HighestTemperature, LowestTemperature, "
         "WeatherId, Remark) VALUES "
         "($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, $10, "
-        "$11, $12, $13, $14) "
+        "$11, $12, $13, NULLIF($14, '')) "
         "RETURNING Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
@@ -129,9 +136,10 @@ grpc::Status ConsumptionServiceImpl::CreateConsumption(
         req->highest_temperature_c(),
         req->lowest_temperature_c(),
         req->weather_id(),
-        // NULLIF('') → NULL for empty optional weather_id / remark.
-        // libpqxx binds empty string as '' by default; empty WeatherId
-        // would FK-fail at the DB. Use a literal NULLIF for that case.
+        // NULLIF('') → NULL for empty optional remark.
+        // (WeatherId is NOT NULL in the schema; empty weather_id is
+        // rejected at app level by ValidateConsumption's caller via
+        // the empty-weather_id check.)
         req->remark());
     // Re-select to populate `resp` (the INSERT's RETURNING isn't
     // directly bindable through libpqxx 7.9.2's exec_params API).
@@ -232,7 +240,8 @@ grpc::Status ConsumptionServiceImpl::UpdateConsumption(
         "EndTime=$4::timestamptz, BeginPercent=$5, EndPercent=$6, "
         "BeginMileage=$7, EndMileage=$8, BeginRange=$9, EndRange=$10, "
         "HighestTemperature=$11, LowestTemperature=$12, WeatherId=$13, "
-        "Remark=$14 WHERE Id=$1 "
+        "Remark=NULLIF($14, '') "
+        "WHERE Id=$1 "
         "RETURNING Id, VehicleId, Start::text, EndTime::text, BeginPercent, "
         "EndPercent, BeginMileage, EndMileage, BeginRange, EndRange, "
         "HighestTemperature, LowestTemperature, WeatherId, Remark",
