@@ -32,7 +32,7 @@
 | `tests/python/test_consumption.py` + `tests/python/doc/test_consumption.md` | 31 tests + MD | Chunk 6 |
 | `tests/python/test_display.py` + `tests/python/doc/test_display.md` | 43 tests + MD | Chunk 7 |
 | `tests/python/test_auth_enforcement.py` + `tests/python/doc/test_auth_enforcement.md` | 3 tests + MD | Chunk 8 |
-| `run_all_tests.sh` | append Python stage (`conda run -n evgrpc-tests pytest ...`) | Chunk 9 |
+| `scripts/run_all_tests.sh` | append Python stage (`conda run -n evgrpc-tests pytest ...`) | Chunk 9 |
 
 ---
 
@@ -165,12 +165,25 @@ print('vehicle stub:', vehicle_pb2_grpc.VehicleServiceStub.__name__)
 
 Expected: prints both names. (Imports resolve correctly thanks to the sed rewriting.)
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Create `tests/python/__init__.py`**
 
 ```bash
 cd /data/Repositories/evGRpc
-git add tests/python/gen/
-git commit -m "build(pytest): commit protoc-generated gRPC stubs"
+touch tests/python/__init__.py
+```
+
+(Empty. Makes `tests.python` a real package, not a namespace
+package. Anything that does `import tests.python.…` needs this file
+to exist; otherwise pytest's import resolution may behave
+unexpectedly. Marking it here — *before* any test code is written —
+keeps the dependency chain explicit.)
+
+- [ ] **Step 4: Commit stubs + `__init__.py`**
+
+```bash
+cd /data/Repositories/evGRpc
+git add tests/python/gen/ tests/python/__init__.py
+git commit -m "build(pytest): commit protoc-generated stubs + tests/python package marker"
 ```
 
 ### Task 1.5: Write smoke test FIRST (TDD red step)
@@ -216,20 +229,21 @@ conda run -n evgrpc-tests pytest tests/python/test_smoke.py -v
 Expected: FAIL — collection error or `fixture not found` for `channel`.
 This confirms the test depends on fixtures we haven't written yet.
 
-### Task 1.7: Write `tests/python/__init__.py` + helpers + conftest
+### Task 1.7: Write helpers + conftest
 
 **Files:**
-- Create: `tests/python/__init__.py`
 - Create: `tests/python/_helpers.py`
 - Create: `tests/python/conftest.py`
 
-- [ ] **Step 1: `tests/python/__init__.py`** — empty file:
+(Note: `tests/python/__init__.py` was already created in Task 1.4
+alongside the gen-package `__init__.py` files. Order matters — Task
+1.4 imports `tests.python.gen.evgrpc.…` which requires the
+`tests_python` package to be importable, so the package marker must
+exist *before* any test code references the package. Putting it
+here in Task 1.7 would silently depend on Python 3 namespace-package
+semantics, which works but is fragile and surprising.)
 
-```python
-# Empty package marker for tests/python.
-```
-
-- [ ] **Step 2: `tests/python/_helpers.py`**
+- [ ] **Step 1: `tests/python/_helpers.py`**
 
 ```python
 """Shared helpers for the evGRpc pytest suite."""
@@ -457,47 +471,30 @@ git add tests/python/__init__.py tests/python/_helpers.py tests/python/conftest.
 git commit -m "test(pytest): scaffold conftest + helpers + fixtures (L1+L2 cleanup)"
 ```
 
-### Task 1.8: Run smoke test (TDD green) + commit
+### Task 1.8: Run smoke test (TDD green) + finalize commit
 
-**Files:**
-- Create: `tests/python/test_smoke.py`
+The smoke test (`test_search_weather_with_valid_bearer_succeeds`) was
+already written and committed in Task 1.5 Step 2. The goal here is to
+verify it passes now (green) and finalize any pending changes.
 
-- [ ] **Step 1: Write the test**
-
-```python
-"""Sanity test: validates that auth + channel + 1 RPC work end-to-end."""
-
-import uuid
-
-from tests.python.gen.evgrpc import weather_pb2 as pb
-from tests.python.gen.evgrpc import weather_pb2_grpc as rpc
-
-
-def test_search_weather_no_token_required_returns_empty_or_any(channel):
-    """With valid bearer, SearchWeather (no prefix) returns 200."""
-    stub = rpc.WeatherServiceStub(channel)
-    resp = stub.SearchWeather(pb.SearchWeatherRequest(prefix="", limit=1))
-    # No assertion on count — just that we got a response, not UNAUTHENTICATED.
-    assert isinstance(resp, pb.SearchWeatherResponse)
-```
-
-- [ ] **Step 2: Run the test**
+- [ ] **Step 1: Run smoke test (green verification)**
 
 ```bash
 cd /data/Repositories/evGRpc
 conda run -n evgrpc-tests pytest tests/python/test_smoke.py -v
 ```
 
-Expected: PASS in <2s (cache hit) or <5s (cold mint).
+Expected: PASS in <2s (token cache hit) or <5s (cold mint).
+Going from `Expected: FAIL` in Task 1.6 to PASS here confirms the
+fixtures built in Task 1.7 unblocked the test.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Finalize commit**
 
 ```bash
 cd /data/Repositories/evGRpc
-# Note: smoke test was already committed in Task 1.5 Step 2. If a fresh
-# write is needed here (e.g., re-touching), this commit picks up changes:
+# If no changes since Task 1.5, --allow-empty is needed.
 git add tests/python/test_smoke.py
-git commit -m "test(pytest): finalize smoke test (TDD green — now passes)" --allow-empty
+git commit -m "test(pytest): smoke test unblocked after fixtures (TDD green)" --allow-empty
 ```
 
 ---
@@ -1270,13 +1267,13 @@ git commit -m "test(pytest): auth enforcement (missing/malformed/forged token) +
 ### Task 9.1: Append Python stage to `run_all_tests.sh`
 
 **Files:**
-- Modify: `run_all_tests.sh` (existing file)
+- Modify: `scripts/run_all_tests.sh` (existing file)
 
 - [ ] **Step 1: Read current `run_all_tests.sh` to find the end-of-script marker**
 
 ```bash
 cd /data/Repositories/evGRpc
-tail -10 run_all_tests.sh
+tail -10 scripts/run_all_tests.sh
 ```
 
 - [ ] **Step 2: Append the Python stage**
@@ -1292,7 +1289,7 @@ conda run -n evgrpc-tests pytest tests/python/ --tb=short -q || exit 1
 
 ```bash
 cd /data/Repositories/evGRpc
-bash run_all_tests.sh 2>&1 | tail -50
+bash scripts/run_all_tests.sh 2>&1 | tail -50
 ```
 
 Expected: passes (the C++ tests already passed; the new Python stage should also pass given prior chunks).
@@ -1301,8 +1298,8 @@ Expected: passes (the C++ tests already passed; the new Python stage should also
 
 ```bash
 cd /data/Repositories/evGRpc
-git add run_all_tests.sh
-git commit -m "ci: append Python gRPC IT stage to run_all_tests.sh"
+git add scripts/run_all_tests.sh
+git commit -m "ci: append Python gRPC IT stage to scripts/run_all_tests.sh"
 ```
 
 ### Task 9.2: Update README

@@ -552,6 +552,7 @@ Per Goal 11, every test case must have a corresponding Markdown
 section. One MD file per test file (not per test, not per RPC),
 so 7 files total:
 
+- `tests/python/doc/test_smoke.md`      # Chunk 1 sanity check
 - `tests/python/doc/test_weather.md`
 - `tests/python/doc/test_vehicle.md`
 - `tests/python/doc/test_source_category.md`
@@ -623,7 +624,7 @@ pytest collects test_vehicle.py::TestHappyPath::test_create_vehicle_returns_id_a
   │                  prior orphans; idempotent if no orphans exist)
   │       yield
   ├─ function body:
-  │     TrackedInsert("vehicle") yields
+  │     TrackedInsert(pg_conn, "vehicle") yields
   │     stub = rpc.VehicleServiceStub(channel)
   │     req  = pb.CreateVehicleRequest(
   │                license_plate=make_license_plate("7f3a2b1c"),
@@ -632,7 +633,8 @@ pytest collects test_vehicle.py::TestHappyPath::test_create_vehicle_returns_id_a
   │     resp = stub.CreateVehicle(req)             # gRPC call through nginx:80
   │     ti.register("vehicle", resp.id)
   │     assert resp.brand == req.brand
-  ├─ TrackedInsert.__exit__: DELETE FROM vehicle WHERE id = '<resp.id>'
+  ├─ ti.register(resp.id)                                # L1 will DELETE on __exit__
+  ├─ TrackedInsert.__exit__: DELETE FROM vehicle WHERE id = ANY(<ids>)
   ├─ (other tests run, each does its own TrackedInsert cycle)
   └─ session ends → cleanup_namespace post-yield runs:
         DELETE FROM consumption WHERE remark LIKE 'test-%'
@@ -713,7 +715,7 @@ attacker-signed calls (no metadata interceptor; explicit
 │           └── *_pb2_grpc.py
 ├── scripts/gen_python_stubs.sh    # NEW
 ├── environment.yml                # NEW
-└── run_all_tests.sh               # modified: append Python stage
+└── scripts/run_all_tests.sh       # modified: append Python stage
 ```
 
 ## 8. Test data isolation specifics
