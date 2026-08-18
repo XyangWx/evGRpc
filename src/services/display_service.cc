@@ -58,7 +58,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
     // Reachable-INTERNAL pre-check: the aggregation CTE below always
     // returns 1 row (via COALESCE-on-empty-set), so `result.empty()`
     // is unreachable through the public API. This EXISTS pre-check
-    // makes the INTERNAL "no aggregate row" branch actually fire when
+    // makes the INVALID_ARGUMENT "no aggregate row" branch actually fire when
     // the filter matches zero rows (the case Chunk 5 spec promises).
     auto exists = db::Exec(tx,
         "SELECT EXISTS(SELECT 1 FROM charging "
@@ -68,7 +68,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
         "DisplayService.GetVehicleCostSummary.exists",
         req->vehicle_id(), start_ts, end_ts);
     if (!exists.empty() && !exists[0][0].as<bool>()) {
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
@@ -97,7 +97,7 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
       // Both CTEs return one row each (via the COALESCE-on-empty-set
       // trick); the SELECT then has exactly one row. Empty here means
       // something went wrong.
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
@@ -152,7 +152,7 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
         "DisplayService.GetMonthlyReport.exists",
         req->year(), req->month(), req->vehicle_id());
     if (!exists.empty() && !exists[0][0].as<bool>()) {
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
@@ -190,7 +190,7 @@ grpc::Status DisplayServiceImpl::GetMonthlyReport(
         + "), 0)::DOUBLE PRECISION AS total_km";
     auto result = db::Exec(tx, sql, "DisplayService.GetMonthlyReport", p);
     if (result.empty()) {
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
@@ -237,7 +237,7 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
         "DisplayService.GetAnnualReport.exists",
         req->year(), req->vehicle_id());
     if (!exists.empty() && !exists[0][0].as<bool>()) {
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
@@ -267,7 +267,7 @@ grpc::Status DisplayServiceImpl::GetAnnualReport(
         + "), 0)::DOUBLE PRECISION AS total_km";
     auto result = db::Exec(tx, sql, "DisplayService.GetAnnualReport", p);
     if (result.empty()) {
-      auto s = grpc::Status(grpc::StatusCode::INTERNAL, "no aggregate row");
+      auto s = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no aggregate row");
       scope.set_status(s);
       return s;
     }
