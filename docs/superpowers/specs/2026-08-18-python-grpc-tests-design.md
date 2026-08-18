@@ -227,7 +227,7 @@ pytest tests/python/ -v
                DELETE FROM consumption     WHERE remark         LIKE 'test-%'
                DELETE FROM charging        WHERE location      LIKE 'test-%'
                                             OR remark           LIKE 'test-%'
-               DELETE FROM vehicle         WHERE license_plate LIKE 'test-%'
+               DELETE FROM vehicle         WHERE licenseplate LIKE 'test-%'
                DELETE FROM weather         WHERE name          LIKE 'test-%'
                DELETE FROM source_category WHERE name          LIKE 'test-%'
              (children-first; FKs verified as NO ACTION in §8.3)
@@ -236,7 +236,7 @@ pytest tests/python/ -v
                DELETE FROM consumption     WHERE remark         LIKE 'test-%'
                DELETE FROM charging        WHERE location      LIKE 'test-%'
                                             OR remark           LIKE 'test-%'
-               DELETE FROM vehicle         WHERE license_plate LIKE 'test-%'
+               DELETE FROM vehicle         WHERE licenseplate LIKE 'test-%'
                DELETE FROM weather         WHERE name          LIKE 'test-%'
                DELETE FROM source_category WHERE name          LIKE 'test-%'
   └─ Function scope (per test):
@@ -323,10 +323,15 @@ Defines four session-scoped fixtures:
 
 ### 5.2 `tests/python/_helpers.py`
 
-- **`class TrackedInsert`** — context manager yielding a closure to
-  register rows the test inserted (`register(table, id)`). On
-  `__exit__` runs `DELETE FROM <table> WHERE id = ANY(<ids>)`. This
-  is the per-function cleanup layer (L1).
+- **`class TrackedInsert(pg_conn, table: str)`** — context manager.
+  `register(id)` tracks inserted rows; `__exit__` runs
+  `DELETE FROM <table> WHERE id = ANY(<ids>)` via the supplied
+  `pg_conn` connection. The connection is **required** (not
+  optional): cleanup must execute even when the test fixture
+  order doesn't pass `pg_conn` explicitly, so the constructor
+  takes it as a positional arg. This is the per-function cleanup
+  layer (L1). The `pg_conn` fixture itself is session-scoped,
+  defined in §5.1.
 
 - **`make_license_plate(ns: str) -> str`** — returns
   `f"test-{ns}{uuid.uuid4().hex[:2]}"`. With `ns` = 8-hex, output
@@ -371,7 +376,7 @@ from tests.python.gen.evgrpc import vehicle_pb2_grpc as rpc
 from tests.python._helpers import TrackedInsert, make_license_plate, make_uuid
 
 class TestHappyPath:
-    def test_create_vehicle_returns_id_and_brand(self, channel, namespace):
+    def test_create_vehicle_returns_id_and_brand(self, channel, namespace, pg_conn):
         stub = rpc.VehicleServiceStub(channel)
         req = pb.CreateVehicleRequest(
             brand=f"test-brand-{namespace}",
@@ -380,9 +385,9 @@ class TestHappyPath:
             purchase_date=...,
             license_plate=make_license_plate(namespace),
         )
-        with TrackedInsert("vehicle") as ti:
+        with TrackedInsert(pg_conn, "vehicle") as ti:
             resp = stub.CreateVehicle(req)
-            ti.register("vehicle", resp.id)
+            ti.register(resp.id)
         assert resp.brand == req.brand
         ...
 
@@ -728,7 +733,7 @@ All `make_*` outputs start with `test-` so the cleanup `LIKE
 
 | Table | Cleanup `LIKE` field(s) | Length budget |
 |---|---|---|
-| vehicle | `license_plate` | VARCHAR(15) — `make_license_plate` returns exactly 15 chars |
+| vehicle | `licenseplate` | VARCHAR(15) — `make_license_plate` returns exactly 15 chars |
 | weather | `name` | VARCHAR(36) — `make_weather_name` returns 29 chars |
 | source_category | `name` | VARCHAR(36) — `make_source_category_name` returns 29 chars |
 | charging | `location` OR `remark` | VARCHAR(100) / TEXT — `make_charging_location` returns 25 chars; tests may also populate `remark` |
@@ -758,7 +763,7 @@ This makes **children-first** the only correct cleanup order:
    — `consumption` depends on `vehicle` and `weather`.
 2. `DELETE FROM charging WHERE location LIKE 'test-%' OR remark LIKE 'test-%'`
    — `charging` depends on `vehicle` and `source_category`.
-3. `DELETE FROM vehicle WHERE license_plate LIKE 'test-%'`
+3. `DELETE FROM vehicle WHERE licenseplate LIKE 'test-%'`
    — only after both `consumption` and `charging` are emptied.
 4. `DELETE FROM weather WHERE name LIKE 'test-%'`
    — only after `consumption` is emptied.

@@ -151,7 +151,7 @@ cd /data/Repositories/evGRpc
 conda run -n evgrpc-tests bash scripts/gen_python_stubs.sh
 ```
 
-Expected: 12 new files under `tests/python/gen/evgrpc/` (6 `*_pb2.py` + 6 `*_pb2_grpc.py`); no errors.
+Expected: 13 new files under `tests/python/gen/evgrpc/` (7 `*_pb2.py` — one per proto including common — + 6 `*_pb2_grpc.py` — one per service, common.proto has none); no errors.
 
 - [ ] **Step 2: Verify import round-trip**
 
@@ -173,7 +173,50 @@ git add tests/python/gen/
 git commit -m "build(pytest): commit protoc-generated gRPC stubs"
 ```
 
-### Task 1.5: Write `tests/python/__init__.py` + helpers + conftest
+### Task 1.5: Write smoke test FIRST (TDD red step)
+
+**Files:**
+- Create: `tests/python/test_smoke.py`
+
+- [ ] **Step 1: Write the test**
+
+Create `/data/Repositories/evGRpc/tests/python/test_smoke.py`:
+
+```python
+"""Sanity test: validates that auth + channel + 1 RPC work end-to-end."""
+
+from tests.python.gen.evgrpc import weather_pb2 as pb
+from tests.python.gen.evgrpc import weather_pb2_grpc as rpc
+
+
+def test_search_weather_with_valid_bearer_succeeds(channel):
+    """With valid bearer, SearchWeather (no prefix) returns 200 + response."""
+    stub = rpc.WeatherServiceStub(channel)
+    resp = stub.SearchWeather(pb.SearchWeatherRequest(prefix="", limit=1))
+    assert isinstance(resp, pb.SearchWeatherResponse)
+```
+
+- [ ] **Step 2: Commit (test exists but cannot pass without fixtures)**
+
+```bash
+cd /data/Repositories/evGRpc
+git add tests/python/test_smoke.py
+git commit -m "test(pytest): add smoke test stub (TDD red — will fail until fixtures exist)"
+```
+
+### Task 1.6: Run smoke test (TDD red verification)
+
+- [ ] **Step 1: Run**
+
+```bash
+cd /data/Repositories/evGRpc
+conda run -n evgrpc-tests pytest tests/python/test_smoke.py -v
+```
+
+Expected: FAIL — collection error or `fixture not found` for `channel`.
+This confirms the test depends on fixtures we haven't written yet.
+
+### Task 1.7: Write `tests/python/__init__.py` + helpers + conftest
 
 **Files:**
 - Create: `tests/python/__init__.py`
@@ -279,7 +322,12 @@ def sweep_all_test_rows(pg_conn) -> dict[str, int]:
         for table, like_clauses in [
             ("consumption", ["remark"]),
             ("charging", ["location", "remark"]),
-            ("vehicle", ["license_plate"]),
+            # NOTE: SQL column is `licenseplate` (no underscore).
+            # `LicensePlate` (unquoted in sql/001_initial.sql) folds
+            # to `licenseplate` in PostgreSQL. The proto field is
+            # snake_case `license_plate` but that's irrelevant for
+            # raw SQL.
+            ("vehicle", ["licenseplate"]),
             ("weather", ["name"]),
             ("source_category", ["name"]),
         ]:
@@ -343,7 +391,15 @@ def auth_token() -> str:
 
 @pytest.fixture(scope="session")
 def channel(auth_token: str):
-    """Insecure gRPC channel to localhost:80 with bearer-token interceptor."""
+    """Insecure gRPC channel to localhost:80 with bearer-token interceptor.
+
+    Uses class-based `grpc.UnaryUnaryClientInterceptor` (modern grpcio
+    API; the function-based `grpc.ClientInterceptor(fn)` form was removed
+    in grpcio ≥ 1.59). For unary-unary calls (which is all evGRpc
+    currently exposes) only `intercept_unary_unary` is needed; if a
+    future streaming RPC is added, also implement the streaming
+    methods.
+    """
     chan = grpc.insecure_channel(DEFAULT_SERVER)
     try:
         grpc.channel_ready_future(chan).result(timeout=5)
@@ -351,12 +407,14 @@ def channel(auth_token: str):
         chan.close()
         pytest.skip(f"{DEFAULT_SERVER} unreachable, skipping Python gRPC IT")
 
-    def _add_bearer(method, request, metadata):
-        metadata = list(metadata or [])
-        metadata.append(("authorization", f"Bearer {auth_token}"))
-        return method(request, tuple(metadata)) or None
+    class _BearerInterceptor(grpc.UnaryUnaryClientInterceptor):
+        def intercept_unary_unary(self, continuation, client_call_details, request):
+            metadata = list(client_call_details.metadata or [])
+            metadata.append(("authorization", f"Bearer {auth_token}"))
+            new_details = client_call_details._replace(metadata=metadata)
+            return continuation(new_details, request)
 
-    return grpc.intercept_channel(chan, grpc.ClientInterceptor(_add_bearer))
+    return grpc.intercept_channel(chan, _BearerInterceptor())
 
 
 @pytest.fixture(scope="session")
@@ -399,7 +457,7 @@ git add tests/python/__init__.py tests/python/_helpers.py tests/python/conftest.
 git commit -m "test(pytest): scaffold conftest + helpers + fixtures (L1+L2 cleanup)"
 ```
 
-### Task 1.6: Write the smoke test
+### Task 1.8: Run smoke test (TDD green) + commit
 
 **Files:**
 - Create: `tests/python/test_smoke.py`
@@ -436,8 +494,10 @@ Expected: PASS in <2s (cache hit) or <5s (cold mint).
 
 ```bash
 cd /data/Repositories/evGRpc
+# Note: smoke test was already committed in Task 1.5 Step 2. If a fresh
+# write is needed here (e.g., re-touching), this commit picks up changes:
 git add tests/python/test_smoke.py
-git commit -m "test(pytest): add smoke test validating auth + channel + 1 RPC"
+git commit -m "test(pytest): finalize smoke test (TDD green — now passes)" --allow-empty
 ```
 
 ---
