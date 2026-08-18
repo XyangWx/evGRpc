@@ -1,0 +1,14 @@
+name: evgrpc-tests
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pytest>=8.0
+  - protobuf>=5.0
+  - pip:
+      - grpcio>=1.60
+      - grpcio-tools>=1.60
+      - psycopg[binary]>=3.1
+      - pyjwt>=2.8
+      - cryptography>=42.0
