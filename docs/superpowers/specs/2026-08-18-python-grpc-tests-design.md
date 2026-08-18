@@ -1,9 +1,9 @@
 # Python gRPC Integration Test Suite for Deployed evGRpc
 
 - **Date:** 2026-08-18
-- **Status:** Design (v2, awaiting re-review after first-review issues)
+- **Status:** Design (v3, awaiting plan/implementation)
 - **Replaces:** none
-- **Supersedes:** v1 of this spec
+- **Supersedes:** v2 of this spec
 
 ## 0. Revision History
 
@@ -393,8 +393,9 @@ Per-service test count breakdown (sum = **161**):
 each have one `List*` RPC where the happy test covers both the
 "empty list" and "list with one rows" variants (`ListXxx` with no
 data → empty response; `ListXxx` after a `CreateXxx` → one row).
-Display has two `List*`-style RPCs (or similar multiple-response
-verbs) that warrant the same split. WeatherService / SourceCategory
+Display has one report-style RPC that warrants the same empty/populated
+split (Display uses `Get*` verbs, not `List*`, but the same
+empty/populated distinction applies). WeatherService / SourceCategory
 use `Search*` (not `List*`), which is exercised once because the
 search-success path covers both states naturally.
 
