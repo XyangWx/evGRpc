@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ConsumptionService
 - **RPCs:** CreateConsumption, GetConsumption, UpdateConsumption, DeleteConsumption, ListConsumptions
-- **Total tests:** 14
+- **Total tests:** 18 (was 14; +4 added in Phase 2 round-2 review)
 - **FK deps:** vehicle_id (required NOT NULL); weather_id (DB nullable, but production requires non-empty — see "Constraints" below).
 
 ## TestHappyPath
@@ -44,6 +44,18 @@
 
 ### test_create_consumption_highest_lt_lowest_temp_returns_invalid
 - **App validation:** highest_temperature_c >= lowest_temperature_c.
+
+### test_create_consumption_highest_eq_lowest_temp_ok
+- **App validation boundary**: highest == lowest is OK (`>=` not `>`).
+
+### test_create_consumption_negative_begin_percent_accepted
+- **Documents production**: negative percent accepted (no app-level validation).
+
+### test_create_consumption_negative_temperature_accepted
+- **Documents production**: negative Celsius temperatures accepted.
+
+### test_create_consumption_early_ev_year_accepted
+- **Documents production**: TIMESTAMPTZ allows any year (1990).
 
 ## TestConstraints
 

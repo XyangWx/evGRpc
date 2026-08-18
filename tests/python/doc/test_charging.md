@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ChargingService
 - **RPCs:** CreateCharging, GetCharging, UpdateCharging, DeleteCharging, ListChargings
-- **Total tests:** 17
+- **Total tests:** 22 (was 17; +5 added in Phase 2 round-2 review)
 - **FK deps:** every Create/Update requires a valid vehicle_id + source_category_id (UUID).
 
 ## TestHappyPath
@@ -59,6 +59,21 @@
 
 ### test_create_charging_location_at_limit_ok
 - **VARCHAR(100):** 100-char location at limit → OK + echoed with len 100.
+
+### test_create_charging_negative_kwh_returns_invalid
+- **App validation**: kwh_charged > 0; -1.0 rejected.
+
+### test_create_charging_negative_cost_returns_invalid
+- **App validation**: cost > 0; -50.0 rejected.
+
+### test_create_charging_slow_charger_type_ok
+- CHARGER_TYPE_SLOW is valid alternative to FAST.
+
+### test_create_charging_with_service_fee_ok
+- DoubleValue wrapper with value=5.0; round-trip OK.
+
+### test_create_charging_no_service_fee_is_null
+- DoubleValue unset → response.HasField("service_fee") == False.
 
 ## TestConstraints
 

@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** DisplayService
 - **RPCs:** 11 (3 v1.1.0 charging reports + 8 others)
-- **Total tests:** 26
+- **Total tests:** 30 (was 26; +4 added in Phase 2 round-2 review)
 - **Strategy:** Focus on validation paths + empty-data responses for v1.1.0 RPCs (COALESCE-on-empty returns zeros). Legacy RPCs fire INTERNAL on empty data — documented, not seeded.
 
 ## TestHappyPath (v1.1.0 charging reports + VehicleCostSummary)
@@ -49,6 +49,18 @@
 
 ### test_get_daily_charging_report_apr_31_returns_invalid
 - 2024-04-31 → INVALID_ARGUMENT (April has 30 days).
+
+### test_get_daily_charging_report_jun_31_returns_invalid
+- 2024-06-31 → INVALID_ARGUMENT (June has 30 days).
+
+### test_get_daily_charging_report_dec_31_ok
+- 2024-12-31 → OK (December has 31 days, at limit).
+
+### test_get_daily_charging_report_year_1900_ok
+- year=1900 → OK (minimum boundary).
+
+### test_get_daily_charging_report_year_1899_returns_invalid
+- year=1899 → INVALID_ARGUMENT (below 1900).
 
 ### test_get_daily_charging_report_with_vehicle_id_filter
 - Random UUID filter → 0 count, vehicle_id echoed back.

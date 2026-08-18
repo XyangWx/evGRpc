@@ -283,6 +283,67 @@ class TestBoundaries:
             ti.register(resp.id)
         assert len(resp.location) == 100
 
+    def test_create_charging_negative_kwh_returns_invalid(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """App validation: kwh_charged must be > 0 (negative also rejected)."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        req = _make_charging_req(vid, scid, kwh_charged=-1.0)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.CreateCharging(req)
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_create_charging_negative_cost_returns_invalid(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """App validation: cost must be > 0 (negative also rejected)."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        req = _make_charging_req(vid, scid, cost=-50.0)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.CreateCharging(req)
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_create_charging_slow_charger_type_ok(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """ChargerType.SLOW is a valid alternative to FAST."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        req = _make_charging_req(vid, scid, charger_type=pb.CHARGER_TYPE_SLOW)
+        with TrackedInsert(pg_conn, "charging") as ti:
+            resp = stub.CreateCharging(req)
+            ti.register(resp.id)
+        assert resp.charger_type == pb.CHARGER_TYPE_SLOW
+
+    def test_create_charging_with_service_fee_ok(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """Explicit service_fee (DoubleValue wrapper) is stored."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        req = _make_charging_req(vid, scid)
+        req.service_fee.value = 5.0
+        with TrackedInsert(pg_conn, "charging") as ti:
+            resp = stub.CreateCharging(req)
+            ti.register(resp.id)
+        assert resp.service_fee.value == 5.0
+
+    def test_create_charging_no_service_fee_is_null(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """No service_fee (DoubleValue unset) → null in DB."""
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        req = _make_charging_req(vid, scid)
+        # Don't set service_fee
+        with TrackedInsert(pg_conn, "charging") as ti:
+            resp = stub.CreateCharging(req)
+            ti.register(resp.id)
+        # Should be unset (has_service_fee() == False)
+        assert not resp.HasField("service_fee")
+
 
 # ─────────────────────────── TestConstraints ───────────────────────────
 

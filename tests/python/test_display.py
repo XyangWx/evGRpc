@@ -253,6 +253,48 @@ class TestBoundaries:
             )
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
+    def test_get_daily_charging_report_jun_31_returns_invalid(
+        self, channel, namespace
+    ):
+        """Jun 31 → INVALID_ARGUMENT (June has 30 days)."""
+        stub = rpc.DisplayServiceStub(channel)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.GetDailyChargingReport(
+                pb.GetDailyChargingReportRequest(year=2024, month=6, day=31)
+            )
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_get_daily_charging_report_dec_31_ok(
+        self, channel, namespace
+    ):
+        """Dec 31 → OK (December has 31 days)."""
+        stub = rpc.DisplayServiceStub(channel)
+        resp = stub.GetDailyChargingReport(
+            pb.GetDailyChargingReportRequest(year=2024, month=12, day=31)
+        )
+        assert resp.day == 31
+
+    def test_get_daily_charging_report_year_1900_ok(
+        self, channel, namespace
+    ):
+        """Year 1900 is the minimum (>= 1900)."""
+        stub = rpc.DisplayServiceStub(channel)
+        resp = stub.GetDailyChargingReport(
+            pb.GetDailyChargingReportRequest(year=1900, month=1, day=1)
+        )
+        assert resp.year == 1900
+
+    def test_get_daily_charging_report_year_1899_returns_invalid(
+        self, channel, namespace
+    ):
+        """Year 1899 → INVALID_ARGUMENT (below 1900)."""
+        stub = rpc.DisplayServiceStub(channel)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.GetDailyChargingReport(
+                pb.GetDailyChargingReportRequest(year=1899, month=1, day=1)
+            )
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
     def test_get_daily_charging_report_with_vehicle_id_filter(
         self, channel, namespace
     ):

@@ -16,7 +16,7 @@ tests would force production changes (out of scope).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import grpc
 import pytest
@@ -248,6 +248,154 @@ class TestBoundaries:
             with pytest.raises(grpc.RpcError) as exc:
                 stub.CreateVehicle(req)
             assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_create_vehicle_negative_battery_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Negative battery is accepted (no app-level validation). Documents current behavior."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.battery_capacity_kwh = -1.0
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        assert resp.battery_capacity_kwh == -1.0
+
+    def test_create_vehicle_negative_range_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Negative range is accepted (no app-level validation)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.calibrated_range_km = -100
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        assert resp.calibrated_range_km == -100
+
+    def test_create_vehicle_empty_brand_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Empty brand is accepted (VARCHAR allows empty)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.brand = ""
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        assert resp.brand == ""
+
+    def test_create_vehicle_unicode_brand_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Unicode brand is accepted (PG VARCHAR is UTF-8)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.brand = "测试-品牌"
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        assert resp.brand == "测试-品牌"
+
+    def test_create_vehicle_earliest_purchase_date_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """DATE 1900-01-01 is accepted (no lower bound enforced)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.purchase_date = datetime(1900, 1, 1, 0, 0, 0)
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        # Convert protobuf Timestamp → datetime for the assertion
+        ts = resp.purchase_date
+        dt = datetime.fromtimestamp(ts.seconds, tz=timezone.utc)
+        assert dt.year == 1900
+
+    def test_create_vehicle_future_purchase_date_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """DATE in the future is accepted (no upper bound)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        req.purchase_date = datetime(2099, 12, 31, 0, 0, 0)
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            resp = stub.CreateVehicle(req)
+            ti.register(resp.id)
+        ts = resp.purchase_date
+        dt = datetime.fromtimestamp(ts.seconds, tz=timezone.utc)
+        assert dt.year == 2099
+
+    def test_update_vehicle_change_license_plate(
+        self, channel, namespace, pg_conn
+    ):
+        """UpdateVehicle can change license_plate (assumes new plate is unique)."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            created = stub.CreateVehicle(req)
+            ti.register(created.id)
+            new_plate = make_license_plate(namespace)
+            updated = stub.UpdateVehicle(pb.UpdateVehicleRequest(
+                id=created.id,
+                brand=created.brand,
+                calibrated_range_km=created.calibrated_range_km,
+                battery_capacity_kwh=created.battery_capacity_kwh,
+                purchase_date=created.purchase_date,
+                license_plate=new_plate,
+            ))
+        assert updated.license_plate == new_plate
+
+    def test_update_vehicle_change_battery_capacity(
+        self, channel, namespace, pg_conn
+    ):
+        """UpdateVehicle can change battery_capacity_kwh."""
+        stub = rpc.VehicleServiceStub(channel)
+        req = _make_create_req(namespace)
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            created = stub.CreateVehicle(req)
+            ti.register(created.id)
+            updated = stub.UpdateVehicle(pb.UpdateVehicleRequest(
+                id=created.id,
+                brand=created.brand,
+                calibrated_range_km=created.calibrated_range_km,
+                battery_capacity_kwh=99.9,
+                purchase_date=created.purchase_date,
+                license_plate=created.license_plate,
+            ))
+        assert updated.battery_capacity_kwh == 99.9
+
+    def test_list_vehicles_paging_returns_consistent(
+        self, channel, namespace, pg_conn
+    ):
+        """Use small page_size to confirm paging protocol works.
+
+        Creates 3 vehicles, then walks pages of 1 to verify all are found.
+        ListVehicles runs INSIDE the with-block so the rows aren't cleaned up yet.
+        """
+        stub = rpc.VehicleServiceStub(channel)
+        ids = []
+        with TrackedInsert(pg_conn, "vehicle") as ti:
+            for i in range(3):
+                req = _make_create_req(namespace)
+                req.license_plate = make_license_plate(namespace)
+                resp = stub.CreateVehicle(req)
+                ti.register(resp.id)
+                ids.append(resp.id)
+            # Walk pages inside the with-block (rows still exist)
+            found = set()
+            page_token = ""
+            for _ in range(20):
+                resp = stub.ListVehicles(
+                    pb.ListVehiclesRequest(page_size=1, page_token=page_token)
+                )
+                for v in resp.vehicles:
+                    if v.id in ids:
+                        found.add(v.id)
+                if not resp.next_page_token:
+                    break
+                page_token = resp.next_page_token
+        assert found == set(ids), f"missing from paged list: {set(ids) - found}"
 
 
 # ─────────────────────────── TestConstraints ───────────────────────────

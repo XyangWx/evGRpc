@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** VehicleService
 - **RPCs:** CreateVehicle, GetVehicle, UpdateVehicle, DeleteVehicle, ListVehicles
-- **Total tests:** 24 (24 unique + 1 skipped until Chunk 6)
+- **Total tests:** 34 (was 25; +9 added in Phase 2 round-2 review)
 - **Purpose:** CRUD + boundaries + UNIQUE constraint.
 
 ## TestHappyPath
@@ -82,6 +82,34 @@
 ### test_create_vehicle_battery_capacity
 - **Parametrize IDs:** `[0.0-True]`, `[0.01-True]`, `[99999999.99-True]`, `[100000000.0-False]`
 - **DECIMAL(10,2):** 0 = OK (no check), small = OK, max (99999999.99) = OK, overflow = INVALID_ARGUMENT.
+
+### test_create_vehicle_negative_battery_accepted
+- **Documents production**: negative battery accepted (no app-level validation).
+
+### test_create_vehicle_negative_range_accepted
+- **Documents production**: negative range accepted.
+
+### test_create_vehicle_empty_brand_accepted
+- **Documents production**: empty brand accepted.
+
+### test_create_vehicle_unicode_brand_accepted
+- **Documents production**: Chinese brand name accepted (UTF-8).
+
+### test_create_vehicle_earliest_purchase_date_accepted
+- **Documents production**: DATE 1900-01-01 accepted (no lower bound).
+
+### test_create_vehicle_future_purchase_date_accepted
+- **Documents production**: DATE in future (2099) accepted (no upper bound).
+
+### test_update_vehicle_change_license_plate
+- **RPC:** UpdateVehicle with new license_plate (assumes unique).
+
+### test_update_vehicle_change_battery_capacity
+- **RPC:** UpdateVehicle with new battery_capacity_kwh.
+
+### test_list_vehicles_paging_returns_consistent
+- **RPC:** Create 3 vehicles, walk pages of 1, verify all 3 found.
+- **Inside `with` block** — read RPC pattern.
 
 ## TestConstraints
 

@@ -243,6 +243,61 @@ class TestBoundaries:
             stub.CreateConsumption(req)
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
+    def test_create_consumption_highest_eq_lowest_temp_ok(
+        self, channel, namespace, pg_conn, vehicle_and_weather
+    ):
+        """App validation: highest == lowest is OK (boundary)."""
+        stub = rpc.ConsumptionServiceStub(channel)
+        vid, wid = vehicle_and_weather
+        req = _make_consumption_req(
+            vid, wid, highest_temperature_c=20.0, lowest_temperature_c=20.0
+        )
+        with TrackedInsert(pg_conn, "consumption") as ti:
+            resp = stub.CreateConsumption(req)
+            ti.register(resp.id)
+        assert resp.highest_temperature_c == 20.0
+        assert resp.lowest_temperature_c == 20.0
+
+    def test_create_consumption_negative_begin_percent_accepted(
+        self, channel, namespace, pg_conn, vehicle_and_weather
+    ):
+        """Negative begin_percent is accepted (no app-level validation)."""
+        stub = rpc.ConsumptionServiceStub(channel)
+        vid, wid = vehicle_and_weather
+        req = _make_consumption_req(vid, wid, begin_percent=-10, end_percent=-50)
+        with TrackedInsert(pg_conn, "consumption") as ti:
+            resp = stub.CreateConsumption(req)
+            ti.register(resp.id)
+        assert resp.begin_percent == -10
+
+    def test_create_consumption_negative_temperature_accepted(
+        self, channel, namespace, pg_conn, vehicle_and_weather
+    ):
+        """Negative temperature is accepted (Celsius can be < 0)."""
+        stub = rpc.ConsumptionServiceStub(channel)
+        vid, wid = vehicle_and_weather
+        req = _make_consumption_req(
+            vid, wid, highest_temperature_c=-10.0, lowest_temperature_c=-30.0
+        )
+        with TrackedInsert(pg_conn, "consumption") as ti:
+            resp = stub.CreateConsumption(req)
+            ti.register(resp.id)
+        assert resp.lowest_temperature_c == -30.0
+
+    def test_create_consumption_early_ev_year_accepted(
+        self, channel, namespace, pg_conn, vehicle_and_weather
+    ):
+        """TIMESTAMPTZ allows any year (PG range: 4713 BC to 294276 AD)."""
+        stub = rpc.ConsumptionServiceStub(channel)
+        vid, wid = vehicle_and_weather
+        start = datetime(1990, 1, 1, 0, 0, 0)
+        end = datetime(1990, 1, 1, 2, 0, 0)
+        req = _make_consumption_req(vid, wid, start=start, end=end)
+        with TrackedInsert(pg_conn, "consumption") as ti:
+            resp = stub.CreateConsumption(req)
+            ti.register(resp.id)
+        assert resp.id
+
 
 # ─────────────────────────── TestConstraints ───────────────────────────
 

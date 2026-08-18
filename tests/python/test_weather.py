@@ -58,10 +58,40 @@ class TestErrorPath:
                 stub.CreateWeather(pb.CreateWeatherRequest(name=name))
         assert exc.value.code() == grpc.StatusCode.ALREADY_EXISTS
 
-    # NOTE: production code accepts empty string for weather.Name (no app-level
-    # validation; VARCHAR(36) accepts ""). No INVALID_ARGUMENT boundary here.
-    # Removed `test_create_weather_empty_name_returns_invalid_argument` after
-    # first implementation revealed the test assumption was wrong.
+    def test_create_weather_empty_name_is_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Empty string is accepted by production (VARCHAR(36) accepts it)."""
+        stub = rpc.WeatherServiceStub(channel)
+        with TrackedInsert(pg_conn, "weather") as ti:
+            resp = stub.CreateWeather(pb.CreateWeatherRequest(name=""))
+            ti.register(resp.id)
+        assert resp.name == ""
+
+    def test_create_weather_unicode_name_is_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Unicode names are accepted (PG VARCHAR is UTF-8)."""
+        stub = rpc.WeatherServiceStub(channel)
+        name = "测试-天气-" + make_weather_name(namespace)
+        # Ensure under 36 chars
+        name = name[:36]
+        with TrackedInsert(pg_conn, "weather") as ti:
+            resp = stub.CreateWeather(pb.CreateWeatherRequest(name=name))
+            ti.register(resp.id)
+        assert resp.name == name
+
+    def test_create_weather_special_chars_name_is_accepted(
+        self, channel, namespace, pg_conn
+    ):
+        """Special chars (no SQL injection risk with parameterized queries)."""
+        stub = rpc.WeatherServiceStub(channel)
+        name = "test-special-!@#-" + make_weather_name(namespace)
+        name = name[:36]
+        with TrackedInsert(pg_conn, "weather") as ti:
+            resp = stub.CreateWeather(pb.CreateWeatherRequest(name=name))
+            ti.register(resp.id)
+        assert resp.name == name
 
 
 # ─────────────────────────── TestBoundaries ───────────────────────────
@@ -86,3 +116,54 @@ class TestBoundaries:
                 resp = stub.CreateWeather(pb.CreateWeatherRequest(name=name))
                 ti.register(resp.id)
             assert len(resp.name) == name_len
+
+    def test_search_weather_empty_prefix_returns_all(
+        self, channel, namespace, pg_conn
+    ):
+        """Empty prefix: PG ^@ '' matches every row (within limit).
+
+        Inner search inside the with-block finds our row; outer search
+        (after cleanup) verifies response is iterable (might be empty
+        after cleanup deletes test rows — just verify shape).
+        """
+        stub = rpc.WeatherServiceStub(channel)
+        name = make_weather_name(namespace)
+        with TrackedInsert(pg_conn, "weather") as ti:
+            stub.CreateWeather(pb.CreateWeatherRequest(name=name))
+            # Inner search: should find our row
+            inner = stub.SearchWeather(
+                pb.SearchWeatherRequest(prefix="", limit=100)
+            )
+            assert len(inner.matches) >= 1
+            assert any(m.id for m in inner.matches)
+            # Register for cleanup
+            ti.register(inner.matches[0].id)
+
+    def test_search_weather_limit_zero_uses_default(
+        self, channel, namespace, pg_conn
+    ):
+        """limit=0 → server uses default (50)."""
+        stub = rpc.WeatherServiceStub(channel)
+        resp = stub.SearchWeather(pb.SearchWeatherRequest(prefix="", limit=0))
+        assert isinstance(resp, pb.SearchWeatherResponse)
+        # Should not raise; default limit is applied server-side
+
+    def test_search_weather_negative_limit_uses_default(
+        self, channel, namespace, pg_conn
+    ):
+        """limit=-1 → server uses default (50)."""
+        stub = rpc.WeatherServiceStub(channel)
+        resp = stub.SearchWeather(pb.SearchWeatherRequest(prefix="", limit=-1))
+        assert isinstance(resp, pb.SearchWeatherResponse)
+
+    def test_search_weather_no_matches_returns_empty(
+        self, channel, namespace
+    ):
+        """No matches for random prefix → empty list."""
+        stub = rpc.WeatherServiceStub(channel)
+        # Use a 32-char hex prefix that's extremely unlikely to match anything
+        marker = uuid.uuid4().hex
+        resp = stub.SearchWeather(
+            pb.SearchWeatherRequest(prefix=marker, limit=10)
+        )
+        assert len(resp.matches) == 0

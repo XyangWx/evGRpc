@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** WeatherService
 - **RPCs:** CreateWeather, SearchWeather
-- **Total tests:** 7 (after removing 1 invalid assumption test + 1 duplicate constraint test; see "Removed" section below)
+- **Total tests:** 14 (was 7; +7 added in Phase 2 round-2 review)
 - **Purpose:** Validate name create/search semantics + VARCHAR(36) length boundaries.
 
 ## TestHappyPath
@@ -38,6 +38,15 @@
 - **Cleanup:** TrackedInsert deletes the first row; the second failed-Create left no row.
 - **Related:** Tests `vehicle.LicensePlate` UNIQUE constraint (Chunk 3).
 
+### test_create_weather_empty_name_is_accepted
+- **Documents production**: VARCHAR(36) accepts empty string. No app-level validation.
+
+### test_create_weather_unicode_name_is_accepted
+- **Documents production**: VARCHAR is UTF-8. Chinese chars work.
+
+### test_create_weather_special_chars_name_is_accepted
+- **Documents production**: Special chars (`!@#`) stored as-is. Parameterized SQL prevents injection.
+
 ## TestBoundaries
 
 ### test_create_weather_name_length
@@ -53,6 +62,18 @@
 - **Expected:** IDs 1/35/36 → OK + correct len; ID 37 → RpcError INVALID_ARGUMENT.
 - **Cleanup:** TrackedInsert deletes accepted rows; rejected row didn't insert.
 - **Related:** Same VARCHAR-length pattern tested for `vehicle.LicensePlate` (Chunk 3, `plate_len` 1/15/16) and `vehicle.Brand` (1/36/37).
+
+### test_search_weather_empty_prefix_returns_all
+- **Documents production**: PG `^@ ''` matches every row. Submit search inside `with` so the row still exists.
+
+### test_search_weather_limit_zero_uses_default
+- **Documents production**: limit=0 → server uses default 50 (no error).
+
+### test_search_weather_negative_limit_uses_default
+- **Documents production**: limit=-1 → server uses default 50.
+
+### test_search_weather_no_matches_returns_empty
+- Random 32-char hex prefix → 0 matches.
 
 ## Removed (from initial plan, found invalid during implementation)
 
