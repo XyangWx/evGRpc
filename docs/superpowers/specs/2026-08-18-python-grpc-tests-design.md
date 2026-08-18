@@ -93,7 +93,7 @@
       template, maintenance convention, and explicit out-of-scope
       decision (no auto-generation; human rationale is the point).
     - **§7** file layout extended to include `tests/python/doc/`
-      with the 7 expected MD files (one per test file).
+      with the 8 expected MD files (one per test file).
     - **§10** notes that auto-generating these docs is explicitly
       out of scope (loses the rationale cross-references that make
       the docs useful for review/augmentation).
@@ -550,7 +550,7 @@ required.
 
 Per Goal 11, every test case must have a corresponding Markdown
 section. One MD file per test file (not per test, not per RPC),
-so 7 files total:
+so 8 files total:
 
 - `tests/python/doc/test_smoke.md`      # Chunk 1 sanity check
 - `tests/python/doc/test_weather.md`
@@ -565,8 +565,8 @@ so 7 files total:
 ~30 lines each = ~5000 lines of MD if split per test. One MD per
 test file with sections per test class (TestHappyPath /
 TestErrorPath / TestBoundaries / TestConstraints) and
-sub-sections per test keeps total doc volume to ~7 × ~150 =
-~1000 lines, navigable in a single scroll, and groups related
+sub-sections per test keeps total doc volume to ~8 × ~150 =
+~1200 lines, navigable in a single scroll, and groups related
 tests so reviewers see context (e.g. all length-boundary tests
 for `LicensePlate` next to each other). One MD per RPC was also
 considered but splits the HappyPath / ErrorPath / Boundaries /
@@ -631,7 +631,6 @@ pytest collects test_vehicle.py::TestHappyPath::test_create_vehicle_returns_id_a
   │                ...
   │            )
   │     resp = stub.CreateVehicle(req)             # gRPC call through nginx:80
-  │     ti.register("vehicle", resp.id)
   │     assert resp.brand == req.brand
   ├─ ti.register(resp.id)                                # L1 will DELETE on __exit__
   ├─ TrackedInsert.__exit__: DELETE FROM vehicle WHERE id = ANY(<ids>)

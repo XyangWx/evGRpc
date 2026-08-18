@@ -4,7 +4,7 @@
 
 **Goal:** Add a Python pytest-based client-side integration test suite for the deployed evGRpc service, hitting the real `nginx:80 → evgrpc:50051 → Postgres` stack via the existing `evgrpc-token` helper.
 
-**Architecture:** 7 test files (6 services + auth enforcement) in `tests/python/`, with shared session-scoped fixtures in `conftest.py`, helpers in `_helpers.py`, and one Markdown doc per test file in `tests/python/doc/`. ~161 test cases cover happy paths, error paths, data boundaries, UNIQUE + FK constraints, and auth enforcement. Test isolation via `test-<8hex>-` namespace prefix + double-layer cleanup (L1 per-function TrackedInsert, L2a session-start sweep, L2b session-end sweep).
+**Architecture:** 8 test files (6 services + auth enforcement + 1 smoke sanity) in `tests/python/`, with shared session-scoped fixtures in `conftest.py`, helpers in `_helpers.py`, and one Markdown doc per test file in `tests/python/doc/`. ~161 test cases cover happy paths, error paths, data boundaries, UNIQUE + FK constraints, and auth enforcement. Test isolation via `test-<8hex>-` namespace prefix + double-layer cleanup (L1 per-function TrackedInsert, L2a session-start sweep, L2b session-end sweep).
 
 **Tech Stack:** conda py312 env (not uv), pytest 8+, grpcio 1.60+, grpcio-tools (for stub regen), protobuf 5+, psycopg[binary] 3.1+ (cleanup DELETE), PyJWT + cryptography (forged-token auth test).
 
@@ -25,6 +25,7 @@
 | `tests/python/conftest.py` | session fixtures: `auth_token`, `channel`, `namespace`, `pg_conn`, `cleanup_namespace` | Chunk 1 |
 | `tests/python/_helpers.py` | `TrackedInsert` ctx mgr, `make_license_plate`, `make_weather_name`, `make_charging_location`, `make_consumption_remark`, `make_uuid` | Chunk 1 |
 | `tests/python/test_smoke.py` | 1 sanity test (validates channel + auth + 1 RPC works end-to-end) | Chunk 1 |
+| `tests/python/doc/test_smoke.md` | per-test Markdown doc for the smoke test (Goal 11) | Chunk 1 |
 | `tests/python/test_weather.py` + `tests/python/doc/test_weather.md` | 12 tests + per-test MD | Chunk 2 |
 | `tests/python/test_vehicle.py` + `tests/python/doc/test_vehicle.md` | 27 tests + MD | Chunk 3 |
 | `tests/python/test_source_category.py` + `tests/python/doc/test_source_category.md` | 10 tests + MD | Chunk 4 |
@@ -213,8 +214,64 @@ def test_search_weather_with_valid_bearer_succeeds(channel):
 
 ```bash
 cd /data/Repositories/evGRpc
-git add tests/python/test_smoke.py
-git commit -m "test(pytest): add smoke test stub (TDD red — will fail until fixtures exist)"
+git add tests/python/test_smoke.py tests/python/doc/test_smoke.md
+git commit -m "test(pytest): add smoke test + per-test MD (TDD red — will fail until fixtures exist)"
+```
+
+### Task 1.5b: Write smoke test doc (`tests/python/doc/test_smoke.md`)
+
+Per Goal 11, every test needs a corresponding MD section.
+
+**Files:**
+- Create: `tests/python/doc/test_smoke.md`
+
+- [ ] **Step 1: Write the doc using the §5.6 template**
+
+```markdown
+# test_smoke.md
+
+## Overview
+- **Service:** WeatherService (sanity)
+- **Total tests:** 1
+- **Purpose:** end-to-end sanity check that the test stack works
+  (conftest fixtures + auth + nginx:80 → evgrpc:50051 → Postgres).
+  NOT a coverage test — a guard against the entire stack being
+  broken (docker-compose down, OIDC IdP unreachable, schema migration
+  dropped a table).
+
+## TestHappyPath
+
+### test_search_weather_with_valid_bearer_succeeds
+- **RPC:** WeatherService.SearchWeather
+- **Purpose:** validate the full auth + channel + RPC stack works
+  end-to-end with a real Bearer token from auth-test.mksword.com.
+- **Setup:** None (relies on session fixtures).
+- **Action:** Call `SearchWeather(prefix="", limit=1)` with the
+  bearer token injected by the `channel` fixture.
+- **Expected:** Response is a `SearchWeatherResponse` (no
+  UNAUTHENTICATED, no gRPC error). Empty list is acceptable.
+- **Cleanup:** None (probe-only test, no DB writes).
+- **Related:** Every other test in `tests/python/` depends on this
+  stack being healthy. If this test fails, the rest will too.
+```
+
+- [ ] **Step 2: Verify MD ↔ test alignment**
+
+```bash
+cd /data/Repositories/evGRpc
+grep -E "^def test_" tests/python/test_smoke.py | sed 's/.*def //; s/(.*//' | sort > /tmp/tests.txt
+grep -E "^### test_" tests/python/doc/test_smoke.md | sed 's/^### //' | sort > /tmp/md.txt
+diff /tmp/tests.txt /tmp/md.txt
+```
+
+Expected: no diff.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /data/Repositories/evGRpc
+git add tests/python/doc/test_smoke.md
+git commit -m "test(pytest): add per-test MD doc for test_smoke (Goal 11)"
 ```
 
 ### Task 1.6: Run smoke test (TDD red verification)
@@ -238,7 +295,7 @@ This confirms the test depends on fixtures we haven't written yet.
 (Note: `tests/python/__init__.py` was already created in Task 1.4
 alongside the gen-package `__init__.py` files. Order matters — Task
 1.4 imports `tests.python.gen.evgrpc.…` which requires the
-`tests_python` package to be importable, so the package marker must
+`tests.python` package to be importable, so the package marker must
 exist *before* any test code references the package. Putting it
 here in Task 1.7 would silently depend on Python 3 namespace-package
 semantics, which works but is fragile and surprising.)
