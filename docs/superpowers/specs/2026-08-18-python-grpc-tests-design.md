@@ -82,6 +82,22 @@
     - §5.1 typo: `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.>.json`
       → `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.json`.
 
+- **v3 → v4:** User added a new requirement during the writing-plans
+  hand-off: every test case must have Markdown documentation for
+  future review and augmentation, placed under `tests/python/doc/`.
+  Resolved:
+    - **Goal 11** added: "All test cases documented in Markdown".
+      Mandates a per-test doc section before the test is merged
+      (code-review gate).
+    - **§5.6** new section: `tests/python/doc/` layout, per-test MD
+      template, maintenance convention, and explicit out-of-scope
+      decision (no auto-generation; human rationale is the point).
+    - **§7** file layout extended to include `tests/python/doc/`
+      with the 7 expected MD files (one per test file).
+    - **§10** notes that auto-generating these docs is explicitly
+      out of scope (loses the rationale cross-references that make
+      the docs useful for review/augmentation).
+
 ## 1. Background
 
 `evGRpc` ships 6 gRPC services with **30 RPCs** total (verified against
@@ -161,6 +177,17 @@ behavior-driven test additions.
    committed).
 10. The suite **slots into `run_all_tests.sh`** as a final stage
     that fails the script non-zero on any pytest failure.
+
+11. **All test cases documented in Markdown**: every test in
+    `tests/python/` has a corresponding section in
+    `tests/python/doc/<service>.md` covering setup, action,
+    expected behavior, cleanup, and rationale. New tests must add
+    their doc section before the test is merged (code-review gate;
+    enforced manually in v1, see §5.6). This is the user's
+    primary vehicle for **future review and augmentation** —
+    rationale for boundary values, cross-references to schema
+    constraints, and notes on what other tests cover similar
+    surface all live here rather than in inline `# comments`.
 
 ## 3. Non-Goals
 
@@ -514,6 +541,68 @@ The JWT shape is built locally; signature is checked against the
 real IdP's JWKS at request time and rejected. No IdP admin change
 required.
 
+### 5.6 Test documentation: `tests/python/doc/`
+
+Per Goal 11, every test case must have a corresponding Markdown
+section. One MD file per test file (not per test, not per RPC),
+so 7 files total:
+
+- `tests/python/doc/test_weather.md`
+- `tests/python/doc/test_vehicle.md`
+- `tests/python/doc/test_source_category.md`
+- `tests/python/doc/test_charging.md`
+- `tests/python/doc/test_consumption.md`
+- `tests/python/doc/test_display.md`
+- `tests/python/doc/test_auth_enforcement.md`
+
+**Why one MD per test file (not per test):** 161 test cases ×
+~30 lines each = ~5000 lines of MD if split per test. One MD per
+test file with sections per test class (TestHappyPath /
+TestErrorPath / TestBoundaries / TestConstraints) and
+sub-sections per test keeps total doc volume to ~7 × ~150 =
+~1000 lines, navigable in a single scroll, and groups related
+tests so reviewers see context (e.g. all length-boundary tests
+for `LicensePlate` next to each other). One MD per RPC was also
+considered but splits the HappyPath / ErrorPath / Boundaries /
+Constraints classification across files, losing the per-class
+reviewability.
+
+**Template** (one block per test):
+
+```markdown
+### test_<name>
+- **RPC:** `Service.RpcName`
+- **Purpose:** one sentence on what this test proves.
+- **Setup:** prerequisite data/state (e.g. "create vehicle V1
+  first" for UNIQUE-violation tests; "no setup" otherwise).
+- **Action:** the gRPC call in plain English.
+- **Expected:** the success response or `gRPC StatusCode.<NAME>`.
+- **Cleanup:** which layer handles this row's DELETE
+  (L1 TrackedInsert, L2a/L2b, or none for probe-only tests).
+- **Rationale:** for boundary tests, why these specific values
+  were chosen (e.g. "1/15 = ALLOWED (below/at limit), 16 =
+  INVALID_ARGUMENT (over limit)"). For constraint tests, the
+  schema clause that creates the constraint (e.g. "schema
+  `sql/001_initial.sql` ~L12: `LicensePlate VARCHAR(15) NOT
+  NULL UNIQUE`"). For happy/error tests, omit or note "obvious".
+- **Related:** links to other tests covering adjacent surface
+  (e.g. "see TestConstraints.test_create_vehicle_duplicate_...").
+```
+
+**Maintenance convention:** a new test may only be merged if its
+MD section is added in the same commit as the test code. The
+code-review gate enforces this manually in v1 (no automation);
+§10 notes a future pytest plugin could enforce it via AST diff.
+
+**Out of scope (auto-generation):** §10 explicitly rules out
+auto-generating these MDs from test source. The point of the
+docs is the human-written rationale (why 1/15/16, which schema
+clause, which related test) — all of which auto-generators
+strip or guess poorly. If a future contributor wants to add a
+new boundary value (e.g. `license_plate` length = 14) they
+should *think about why* the new value is interesting, and
+writing the rationale by hand enforces that.
+
 ## 6. Data flow
 
 ### 6.1 Single test execution
@@ -601,6 +690,7 @@ attacker-signed calls (no metadata interceptor; explicit
 ├── proto/evgrpc/*.proto          # existing, source of truth
 ├── tests/python/                  # NEW
 │   ├── __init__.py                # empty
+│   ├── doc/                       # NEW (§5.6): per-test Markdown docs
 │   ├── conftest.py                # session fixtures (§5.1)
 │   ├── _helpers.py                # TrackedInsert + name builders (§5.2)
 │   ├── test_weather.py            # per-service test files (§5.3)
@@ -749,6 +839,9 @@ Notes:
   auth test (§5.5).
 
 ## 10. Out of scope / future work
+
+- **Auto-generated test docs.** §5.6 rules this out: the docs
+  are for human-written rationale, which auto-generators strip.
 
 - **RBAC / per-RPC scope enforcement.** Add when server grows scope
   checking; the test harness already supports `metadata=` overrides
