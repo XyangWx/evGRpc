@@ -48,6 +48,40 @@
       opt-in); `make_uuid()` purpose documented; `sed -i` GNU note
       added.
 
+- **v2 → v3:** Reviewer found 1 v1 finding still broken (§4 cleanup
+  ordering list was parents-first despite annotation), 4 new issues
+  in §5.4 gen script, (1 dangling cross-ref in §2.7), and 4 advisory
+  recommendations. Resolved:
+    - §4 PRE-yield DELETE list reordered to children-first
+      (`consumption → charging → vehicle → weather → source_category`),
+      matching §8.3. POST-yield is now explicitly children-first too
+      (no longer "same as pre-yield", since the old §4 order was
+      wrong and would have been inherited).
+    - §5.4 sed generalized: pattern now `s/^import ([a-z_]+)_pb2 as/`
+      instead of hardcoded `vehicle. Comment also fixed (no longer
+      refers to the non-existent `evgrpc_pb2`).
+    - §5.4 added second sed for cross-file imports: protoc emits
+      `from evgrpc import common_pb2 as ...` in `vehicle_pb2.py` and
+      `display_pb2.py`; rewrites to `from . import common_pb2 as ...`.
+    - §5.4 layout: removed `common_pb2_grpc.py` from the file list
+      (common.proto has no `service` declaration, so protoc does not
+      emit a grpc-python counterpart).
+    - §2.7 removed dangling "(matching the threshold in §9.1)" —
+      §9.1 is a command list with no threshold.
+    - §5.2 collision math reworded: 2-hex suffix is for *tie-breaking*
+      within a single test, not collision avoidance across the suite.
+      Real safety is L1 per-function cleanup (`TrackedInsert` deletes
+      the row before the next test runs).
+    - §5.1 added `pg_conn` fixture spec: `psycopg` connection string
+      comes from `DATABASE_URL` env var, falls back to the docker-compose
+      default `postgresql://vegrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc`
+      (password URL-encoded because of the embedded `@`).
+    - §2.7 added caveat: DisplayService's 43 tests hit multi-table
+      aggregates and may exceed the 0.65s/case average; total budget
+      target stays ≤120s but per-case budget is approximate, not hard.
+    - §5.1 typo: `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.>.json`
+      → `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.json`.
+
 ## 1. Background
 
 `evGRpc` ships 6 gRPC services with **30 RPCs** total (verified against
@@ -113,9 +147,11 @@ behavior-driven test additions.
    (Scope / RBAC tests deferred — see §3.)
 7. **Total runtime ≤ 120s** on the dev VM for the full suite
    (161 cases × ~0.65s avg = ~105s typical). Hard-fail threshold
-   is `> 120s` (matching the threshold in §9.1). If a future change
-   pushes past 120s reliably, the threshold and/or per-case budget
-   must be revisited.
+   is `> 120s`. Per-case budget is approximate — DisplayService's
+   43 tests hit multi-table aggregates and may push individual
+   cases past 0.65s; aggregate total is what matters. If a future
+   change pushes the suite past 120s reliably, the threshold and/or
+   per-case budget must be revisited.
 8. **No pollution of dev data**: tests insert rows only with a unique
    `test-<random>-` prefix and clean up at function teardown, session
    end, AND session start (defense against hard crashes).
@@ -161,16 +197,21 @@ pytest tests/python/ -v
        ├─ conftest.py::namespace        # 8-hex session-unique prefix (no 'test-')
        └─ conftest.py::cleanup_namespace (autouse, session scope)
              PRE-yield (session start):
+               DELETE FROM consumption     WHERE remark         LIKE 'test-%'
+               DELETE FROM charging        WHERE location      LIKE 'test-%'
+                                            OR remark           LIKE 'test-%'
                DELETE FROM vehicle         WHERE license_plate LIKE 'test-%'
                DELETE FROM weather         WHERE name          LIKE 'test-%'
                DELETE FROM source_category WHERE name          LIKE 'test-%'
-               DELETE FROM charging        WHERE location      LIKE 'test-%'
-                                            OR remark           LIKE 'test-%'
-               DELETE FROM consumption     WHERE remark         LIKE 'test-%'
              (children-first; FKs verified as NO ACTION in §8.3)
              yield
              POST-yield (session teardown):
-               same DELETE sweep as pre-yield
+               DELETE FROM consumption     WHERE remark         LIKE 'test-%'
+               DELETE FROM charging        WHERE location      LIKE 'test-%'
+                                            OR remark           LIKE 'test-%'
+               DELETE FROM vehicle         WHERE license_plate LIKE 'test-%'
+               DELETE FROM weather         WHERE name          LIKE 'test-%'
+               DELETE FROM source_category WHERE name          LIKE 'test-%'
   └─ Function scope (per test):
        └─ _helpers.py::TrackedInsert context manager
              yield
@@ -219,8 +260,19 @@ Defines four session-scoped fixtures:
 
   For parallel/isolated runs (e.g. two pytest invocations in
   different worktrees against the same dev box), set
-  `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.>.json` to give each run its
+  `EVGRPC_CACHE=/tmp/evgrpc_token-<pid>.json` to give each run its
   own cache file. (Default keeps the shared cache.)
+
+- **`pg_conn`** — `psycopg` connection to the `evgrpc` database,
+  used by the L2a/L2b cleanup sweeps (`cleanup_namespace` fixture)
+  and by `TrackedInsert`'s L1 DELETE. Connection string comes from
+  the `DATABASE_URL` env var (matching the C++ server's
+  `config.json` convention). Falls back to the docker-compose default:
+  `postgresql://vegrpc_admin:NewUser%40123@127.0.0.1:5432/evgrpc`
+  (password URL-encoded because of the embedded `@`; see the
+  `evGRpc 测试约定` entry in MEMORY.md). Tests that don't need DB
+  access (e.g. `test_auth_enforcement.py`) simply don't reference
+  `pg_conn`, so pytest doesn't instantiate it for them.
 
 - **`channel`** — creates an insecure gRPC channel to `localhost:80`,
   installs a metadata-injecting interceptor that adds
@@ -252,8 +304,13 @@ Defines four session-scoped fixtures:
 - **`make_license_plate(ns: str) -> str`** — returns
   `f"test-{ns}{uuid.uuid4().hex[:2]}"`. With `ns` = 8-hex, output
   length = 5 + 8 + 2 = **15 chars exactly** (VARCHAR(15) limit).
-  2-hex random suffix gives 256 values per namespace, which is
-  collision-free for ~150 tests with overwhelming probability.
+  The 2-hex random suffix (256 possible values) is for tie-breaking
+  *within a single test*, not cross-test collision avoidance. The
+  real safety mechanism is L1 per-function cleanup: every test that
+  creates a `vehicle` row registers the row in `TrackedInsert`, and
+  the context manager's `__exit__` `DELETE`s it before the next
+  test starts. The session-unique `namespace` prefix is what keeps
+  parallel pytest invocations from colliding.
 
 - **`make_weather_name(ns: str) -> str`** — returns
   `f"test-{ns}{uuid.uuid4().hex[:16]}"`. Length = 5 + 8 + 16 = 29
@@ -355,10 +412,18 @@ python -m grpc_tools.protoc \
     --python_out=tests/python/gen \
     --grpc_python_out=tests/python/gen \
     proto/evgrpc/*.proto
-# Generated *_pb2_grpc.py uses `import evgrpc_pb2 as ...`; rewrite
-# to package-relative form so `from . import vehicle_pb2 as ...` works.
-sed -i 's/^import vehicle_pb2 as/from . import vehicle_pb2 as/' \
+# Generated *_pb2_grpc.py uses `import <svc>_pb2 as ...` for each of the
+# 6 services (vehicle, weather, source_category, charging, consumption,
+# display). Rewrite to package-relative form so the `tests.python.gen.evgrpc`
+# package imports resolve correctly.
+sed -i -E 's/^import ([a-z_]+)_pb2 as/from . import \1_pb2 as/' \
     tests/python/gen/evgrpc/*_pb2_grpc.py
+# Generated *_pb2.py cross-imports sibling messages (e.g. vehicle.proto
+# imports evgrpc/common.proto; display.proto imports both common and
+# charging). protoc emits `from evgrpc import common_pb2 as ...`; rewrite
+# to package-relative form.
+sed -i -E 's/^from evgrpc import ([a-z_]+)_pb2/from . import \1_pb2/' \
+    tests/python/gen/evgrpc/*_pb2.py
 # Generate __init__.py for the gen package and the evgrpc subpackage.
 touch tests/python/gen/__init__.py
 touch tests/python/gen/evgrpc/__init__.py
@@ -371,8 +436,7 @@ tests/python/gen/
 ├── __init__.py
 └── evgrpc/
     ├── __init__.py
-    ├── common_pb2.py
-    ├── common_pb2_grpc.py
+    ├── common_pb2.py            # common.proto has no `service`, so no common_pb2_grpc.py
     ├── charging_pb2.py
     ├── charging_pb2_grpc.py
     ├── consumption_pb2.py
