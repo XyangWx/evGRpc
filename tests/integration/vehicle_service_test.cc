@@ -422,4 +422,36 @@ TEST_F(VehicleServiceIT, DataHelpers_MakeValidVehicleIsValid) {
   // appears in Vehicle (the response). Tested via `v.id()` above.
 }
 
+
+// Phase L: page_size=INT_MAX used to overflow page_size+1 → INT_MIN.
+// Now capped to kMaxPageSize-1=999.
+TEST_F(VehicleServiceIT, ListVehicles_IntMaxPageSize_Ok) {
+  // Insert 1 vehicle so the result isn't empty.
+  Vehicle v;
+  grpc::ClientContext c;
+  ASSERT_TRUE(VehicleService::NewStub(channel())->CreateVehicle(
+      &c, data::MakeValidCreateVehicleRequest(), &v).ok());
+  auto stub = VehicleService::NewStub(channel());
+  ListVehiclesRequest req;
+  req.set_page_size(2147483647);  // INT_MAX
+  ListVehiclesResponse resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->ListVehicles(&ctx, req, &resp);
+  EXPECT_TRUE(st.ok()) << st.error_message();
+}
+
+// Phase L: Non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via
+// std::stoi throw). Tests the Phase A fix.
+TEST_F(VehicleServiceIT, ListVehicles_InvalidPageToken_InvalidArgument) {
+  auto stub = VehicleService::NewStub(channel());
+  ListVehiclesRequest req;
+  req.set_page_token("not_a_number");
+  ListVehiclesResponse resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->ListVehicles(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_NE(st.error_message().find("page_token"), std::string::npos)
+      << st.error_message();
+}
+
 }  // namespace evgrpc::test

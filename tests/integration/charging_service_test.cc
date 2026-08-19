@@ -476,4 +476,53 @@ TEST_F(ChargingServiceIT, ListChargings_StartAfterStartBefore_RangeFilter) {
   }
 }
 
+// Phase L: ChargerType UNSPECIFIED (proto3 default) → INVALID_ARGUMENT
+// (was INTERNAL via not_null_violation → error.cc default). Validates
+// the Phase 3 fix that added app-level validation in charging_service.cc.
+TEST_F(ChargingServiceIT, CreateCharging_ChargerTypeUnspecified_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  auto stub = ChargingService::NewStub(channel());
+  auto req = data::MakeValidCreateChargingRequest(vid, sid);
+  req.set_charger_type(ChargerType::CHARGER_TYPE_UNSPECIFIED);
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_NE(st.error_message().find("FAST"), std::string::npos)
+      << st.error_message();
+}
+
+// Phase L: page_size=INT_MAX used to overflow page_size+1 → INT_MIN
+// → PG "LIMIT must not be negative". Now capped to kMaxPageSize-1.
+TEST_F(ChargingServiceIT, ListChargings_IntMaxPageSize_Ok) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  // Insert 1 charging so the result isn't empty.
+  data::CreateChargingId(channel(), vid, sid);
+  auto stub = ChargingService::NewStub(channel());
+  ListChargingsRequest req;
+  req.set_page_size(2147483647);  // INT_MAX
+  ListChargingsResponse resp;
+  grpc::ClientContext ctx;
+  // Before Phase D fix: returned INVALID_ARGUMENT "LIMIT must not be negative".
+  // After fix: OK, returns up to 999 results (capped).
+  grpc::Status st = stub->ListChargings(&ctx, req, &resp);
+  EXPECT_TRUE(st.ok()) << st.error_message();
+}
+
+// Phase L: Non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via
+// std::stoi throw). Tests the Phase A fix.
+TEST_F(ChargingServiceIT, ListChargings_InvalidPageToken_InvalidArgument) {
+  auto stub = ChargingService::NewStub(channel());
+  ListChargingsRequest req;
+  req.set_page_token("not_a_number");
+  ListChargingsResponse resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->ListChargings(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_NE(st.error_message().find("page_token"), std::string::npos)
+      << st.error_message();
+}
+
 }  // namespace evgrpc::test
