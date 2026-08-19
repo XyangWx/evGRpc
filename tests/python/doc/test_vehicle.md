@@ -1,167 +1,186 @@
 # test_vehicle.md
 
-## Overview
-- **Service:** VehicleService
-- **RPCs:** CreateVehicle, GetVehicle, UpdateVehicle, DeleteVehicle, ListVehicles
-- **Total tests:** 40 (was 37; +3 added in Phase D for page_size INT_MAX fix)
-- **Purpose:** CRUD + boundaries + UNIQUE constraint.
+## 概述
+- **服务：** VehicleService
+- **RPC：** CreateVehicle, GetVehicle, UpdateVehicle, DeleteVehicle, ListVehicles
+- **测试总数：** 40（原 37 个；Phase D 为 page_size INT_MAX 修复新增 3 个）
+- **目的：** CRUD + 边界 + UNIQUE 约束。
 
 ## TestHappyPath
 
 ### test_create_vehicle_returns_id_and_brand
-- **RPC:** VehicleService.CreateVehicle
-- **Purpose:** Verify Create returns UUID + echoed fields.
-- **Action:** CreateVehicle with valid fields.
-- **Expected:** Non-empty `id`, `brand == req.brand`.
-- **Cleanup:** TrackedInsert.
+- **RPC：** VehicleService.CreateVehicle
+- **目的：** 验证 Create 返回 UUID 和回显字段。
+- **操作：** 用合法字段调用 CreateVehicle。
+- **预期：** `id` 非空，`brand == req.brand`。
+- **清理：** TrackedInsert。
 
 ### test_get_vehicle_returns_created
-- **RPC:** VehicleService.GetVehicle
-- **Purpose:** Round-trip Get returns the same row that Create inserted.
-- **Action:** CreateVehicle + GetVehicle (BOTH inside `with TrackedInsert` — GetVehicle after __exit__ would 404 since cleanup already deleted).
-- **Expected:** `got.id == created.id`, `got.license_plate == req.license_plate`.
-- **Related:** Identical "search-after-cleanup" bug caught in Weather chunk; documented for implementer.
+- **RPC：** VehicleService.GetVehicle
+- **目的：** Round-trip Get 返回与 Create 插入的那一行相同的数据。
+- **操作：** CreateVehicle + GetVehicle（**两者都在 `with TrackedInsert` 内**
+  —— `__exit__` 之后 GetVehicle 会 404，因为清理已经把它删了）。
+- **预期：** `got.id == created.id`，`got.license_plate == req.license_plate`。
+- **关联：** 与 Weather chunk 里抓到的 "search-after-cleanup" bug 同类；
+  记录在这里方便实现者参考。
 
 ### test_update_vehicle_changes_brand
-- **RPC:** VehicleService.UpdateVehicle
-- **Purpose:** UpdateVehicle persists changes.
-- **Action:** Create + Update (both inside `with`).
-- **Expected:** `updated.brand == "test-brand-updated"`.
-- **Cleanup:** TrackedInsert.
+- **RPC：** VehicleService.UpdateVehicle
+- **目的：** UpdateVehicle 持久化变更。
+- **操作：** Create + Update（都在 `with` 内）。
+- **预期：** `updated.brand == "test-brand-updated"`。
+- **清理：** TrackedInsert。
 
 ### test_delete_vehicle_removes_row
-- **RPC:** VehicleService.DeleteVehicle
-- **Purpose:** DeleteVehicle removes the row; subsequent Get → NOT_FOUND.
-- **Action:** Create + DeleteVehicle + GetVehicle(404) — all inside `with`.
-- **Note:** After DeleteVehicle, call `ti.unregister(created.id)` (per round-1 review fix) to skip L1 cleanup.
-- **Expected:** GetVehicle raises `NOT_FOUND`.
+- **RPC：** VehicleService.DeleteVehicle
+- **目的：** DeleteVehicle 移除该行；后续 Get → NOT_FOUND。
+- **操作：** Create + DeleteVehicle + GetVehicle(404) —— 全在 `with` 内。
+- **注意：** DeleteVehicle 之后调用 `ti.unregister(created.id)`
+  （round-1 review 修复），跳过 L1 清理。
+- **预期：** GetVehicle 抛 `NOT_FOUND`。
 
 ### test_list_vehicles_returns_response
-- **RPC:** VehicleService.ListVehicles
-- **Purpose:** ListVehicles accepts `page_size` + `page_token` (not `page` — plan's draft had wrong field name).
-- **Action:** ListVehicles(page_size=1).
-- **Expected:** Returns `ListVehiclesResponse` with iterable `vehicles` (may be empty).
-- **Related:** Pagination uses page_token (offset as string), not page numbers.
+- **RPC：** VehicleService.ListVehicles
+- **目的：** ListVehicles 接受 `page_size` + `page_token`
+  （**不是 `page`** —— 计划初稿里字段名写错了）。
+- **操作：** ListVehicles(page_size=1)。
+- **预期：** 返回 `ListVehiclesResponse`，含可迭代的 `vehicles`
+  （可能为空）。
+- **关联：** 分页用的是 page_token（offset 字符串），不是页码。
 
 ### test_list_vehicles_after_create_includes_new
-- **RPC:** VehicleService.ListVehicles
-- **Purpose:** Newly-created vehicle is reachable via paged list.
-- **Action:** Create + walk pages (max 10, page_size=100, page_token=offset).
-- **Expected:** Found in some page. Cleanup INSIDE `with` (same GetVehicle bug).
+- **RPC：** VehicleService.ListVehicles
+- **目的：** 新创建的车辆可通过分页列表拿到。
+- **操作：** Create + 翻页（最多 10 页，page_size=100，page_token=offset）。
+- **预期：** 在某一页中找到。清理在 `with` 内（与 GetVehicle 同类 bug）。
 
 ## TestErrorPath
 
 ### test_get_vehicle_unknown_id_returns_not_found
-- **RPC:** VehicleService.GetVehicle
-- **Purpose:** Random UUID → NOT_FOUND.
+- **RPC：** VehicleService.GetVehicle
+- **目的：** 随机 UUID → NOT_FOUND。
 
 ### test_update_vehicle_unknown_id_returns_not_found
-- **RPC:** VehicleService.UpdateVehicle
-- **Purpose:** Random UUID + valid UpdateVehicleRequest → NOT_FOUND.
+- **RPC：** VehicleService.UpdateVehicle
+- **目的：** 随机 UUID + 合法的 UpdateVehicleRequest → NOT_FOUND。
 
 ### test_delete_vehicle_unknown_id_returns_not_found
-- **RPC:** VehicleService.DeleteVehicle
-- **Purpose:** Random UUID → NOT_FOUND.
+- **RPC：** VehicleService.DeleteVehicle
+- **目的：** 随机 UUID → NOT_FOUND。
 
 ## TestBoundaries
 
 ### test_create_vehicle_license_plate_length
-- **Parametrize IDs:** `[1-True]`, `[15-True]`, `[16-False]`
-- **VARCHAR(15):** 1 = OK, 15 = at-limit OK, 16 = INVALID_ARGUMENT ("value too long").
-- **Helper:** `_make_create_req(ns, plate_len)` truncates or pads with 'x'.
+- **参数化 ID：** `[1-True]`, `[15-True]`, `[16-False]`
+- **VARCHAR(15)：** 1 = OK，15 = 恰好到上限 OK，16 = INVALID_ARGUMENT
+  （"value too long"）。
+- **辅助：** `_make_create_req(ns, plate_len)` 截断或补 `'x'`。
 
 ### test_create_vehicle_brand_length
-- **Parametrize IDs:** `[1-True]`, `[36-True]`, `[37-False]`
-- **VARCHAR(36):** 1 = OK, 36 = at-limit OK, 37 = INVALID_ARGUMENT.
+- **参数化 ID：** `[1-True]`, `[36-True]`, `[37-False]`
+- **VARCHAR(36)：** 1 = OK，36 = 恰好到上限 OK，37 = INVALID_ARGUMENT。
 
 ### test_create_vehicle_calibrated_range
-- **Parametrize IDs:** `[0-True]`, `[1-True]`, `[2147483647-True]`
-- **INT column:** 0 = OK (no check), positive = OK, INT32 max (2^31-1) = OK.
-- **NOT tested:** INT32 overflow (2^31). Protobuf's int32 wire format rejects it client-side (`ValueError: Value out of range: 2147483648`), so we can't even send it. PG's INT column accepts any int4 value; the boundary only exists in the protobuf layer.
+- **参数化 ID：** `[0-True]`, `[1-True]`, `[2147483647-True]`
+- **INT 列：** 0 = OK（无校验），正值 = OK，INT32 上限（2^31-1）= OK。
+- **未覆盖：** INT32 溢出（2^31）。Protobuf 的 int32 wire format
+  在客户端就拒绝（`ValueError: Value out of range: 2147483648`），
+  根本发不出去。PG 的 INT 列接受任意 int4 值；这个边界只存在于
+  protobuf 层。
 
 ### test_create_vehicle_battery_capacity
-- **Parametrize IDs:** `[0.0-True]`, `[0.01-True]`, `[99999999.99-True]`, `[100000000.0-False]`
-- **DECIMAL(10,2):** 0 = OK (no check), small = OK, max (99999999.99) = OK, overflow = INVALID_ARGUMENT.
+- **参数化 ID：** `[0.0-True]`, `[0.01-True]`, `[99999999.99-True]`, `[100000000.0-False]`
+- **DECIMAL(10,2)：** 0 = OK（无校验），小值 = OK，上限（99999999.99）= OK，
+  溢出 = INVALID_ARGUMENT。
 
 ### test_create_vehicle_negative_battery_accepted
-- **Documents production**: negative battery accepted (no app-level validation).
+- **记录当前行为：** 负 battery 可被接受（无 app 校验）。
 
 ### test_create_vehicle_negative_range_accepted
-- **Documents production**: negative range accepted.
+- **记录当前行为：** 负 range 可被接受。
 
 ### test_create_vehicle_empty_brand_accepted
-- **Documents production**: empty brand accepted.
+- **记录当前行为：** 空 brand 可被接受。
 
 ### test_create_vehicle_unicode_brand_accepted
-- **Documents production**: Chinese brand name accepted (UTF-8).
+- **记录当前行为：** 中文 brand name 可被接受（UTF-8）。
 
 ### test_create_vehicle_earliest_purchase_date_accepted
-- **Documents production**: DATE 1900-01-01 accepted (no lower bound).
+- **记录当前行为：** DATE 1900-01-01 可被接受（无下限）。
 
 ### test_create_vehicle_future_purchase_date_accepted
-- **Documents production**: DATE in future (2099) accepted (no upper bound).
+- **记录当前行为：** 未来的 DATE（2099）可被接受（无上限）。
 
 ### test_update_vehicle_change_license_plate
-- **RPC:** UpdateVehicle with new license_plate (assumes unique).
+- **RPC：** UpdateVehicle 配新的 license_plate（假设不重复）。
 
 ### test_update_vehicle_change_battery_capacity
-- **RPC:** UpdateVehicle with new battery_capacity_kwh.
+- **RPC：** UpdateVehicle 配新的 battery_capacity_kwh。
 
 ### test_list_vehicles_paging_returns_consistent
-- **RPC:** Create 3 vehicles, walk pages of 1, verify all 3 found.
-- **Inside `with` block** — read RPC pattern.
+- **RPC：** 创建 3 辆车，以 page_size=1 翻页，验证 3 辆都被找到。
+- **`with` 块内部** —— 读 RPC 的同种模式。
 
 ## TestConstraints
 
 ### test_create_vehicle_duplicate_license_plate_returns_already_exists
-- **UNIQUE constraint** on `vehicle.LicensePlate`.
-- Per `error.cc`: `unique_violation` → `ALREADY_EXISTS`.
+- `vehicle.LicensePlate` 上的 **UNIQUE 约束**。
+- 依据 `error.cc`：`unique_violation` → `ALREADY_EXISTS`。
 
 ### test_update_vehicle_to_duplicate_license_plate_returns_already_exists
-- Update V2 with V1's plate → UNIQUE hit.
-- Same `ALREADY_EXISTS`.
+- 用 V1 的车牌 update V2 → 命中 UNIQUE。
+- 同样是 `ALREADY_EXISTS`。
 
 ### test_delete_vehicle_with_consumption_returns_invalid_argument
-- **Status:** SKIPPED (will be enabled in Chunk 6 after ConsumptionService tests land).
-- **FK constraint:** Consumption.VehicleId REFERENCES vehicle(Id). PG default NO ACTION.
-- Per `error.cc`: `foreign_key_violation` → `INVALID_ARGUMENT` (not FAILED_PRECONDITION — fixed in round-1 review).
-- **Action plan:** Chunk 6 Step 3 removes the `@pytest.mark.skip` decorator.
+- **状态：** 已跳过（将在 Chunk 6 中 ConsumptionService 测试落地后启用）。
+- **FK 约束：** Consumption.VehicleId REFERENCES vehicle(Id)。
+  PG 默认 NO ACTION。
+- 依据 `error.cc`：`foreign_key_violation` → INVALID_ARGUMENT
+  （**不是** FAILED_PRECONDITION —— round-1 review 修复后的结果）。
+- **行动计划：** Chunk 6 Step 3 移除 `@pytest.mark.skip` 装饰器。
 
 
 
 ### test_list_vehicles_invalid_page_token_returns_invalid
-- **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL).
-- `std::stoi` throws `std::invalid_argument` on non-numeric input, falls through `error.cc` to default INTERNAL. Now uses `ParsePageToken` helper.
+- **Phase A 修复：** 非数字 page_token → INVALID_ARGUMENT（原本是 INTERNAL）。
+- `std::stoi` 收到非数字时抛 `std::invalid_argument`，
+  落到 `error.cc` 的默认 INTERNAL。现在改用 `ParsePageToken` 辅助函数。
 
 ### test_list_vehicles_overflow_page_token_returns_invalid
-- page_token > INT_MAX → INVALID_ARGUMENT (was INTERNAL via `std::out_of_range`).
+- page_token > INT_MAX → INVALID_ARGUMENT
+  （原本经 `std::out_of_range` 报 INTERNAL）。
 
 ### test_list_vehicles_empty_page_token_works
-- Empty token = first page (offset 0). Documented behavior.
+- 空 token = 第一页（offset 0）。记录当前行为。
 
 
 
 ### test_list_vehicles_int_max_page_size_caps_to_1000
-- **Phase D fix**: page_size=INT_MAX (2147483647) → OK, capped to 999 (not INT_MAX overflow).
-- Bug: page_size + 1 overflowed to INT_MIN, PG returned 'LIMIT must not be negative'.
-- Fix: cap page_size at kMaxPageSize-1=999 before +1.
+- **Phase D 修复：** page_size=INT_MAX（2147483647）→ OK，截到 999
+  （不是 INT_MAX 溢出）。
+- Bug：page_size + 1 溢出到 INT_MIN，PG 报
+  'LIMIT must not be negative'。
+- 修复：在 +1 之前把 page_size 截到 kMaxPageSize-1=999。
 
 ### test_list_vehicles_negative_page_size_uses_default
-- page_size <= 0 → server uses default 50. Documents existing behavior.
+- page_size <= 0 → 服务端使用默认值 50。记录当前行为。
 
-## Removed (from initial plan, found invalid during implementation)
+## Removed（来自初始计划，实现时发现无效）
 
 ### test_create_vehicle_empty_brand_returns_invalid_argument
-- **Why removed:** no app-level validation; VARCHAR(36) accepts "".
+- **为何删除：** 没有 app 校验；VARCHAR(36) 接受 ""。
 
 ### test_create_vehicle_negative_battery_returns_invalid_argument
-- **Why removed:** no app-level validation; DECIMAL(10,2) accepts negative.
+- **为何删除：** 没有 app 校验；DECIMAL(10,2) 接受负值。
 
 ### test_create_vehicle_missing_required_field_returns_invalid_argument
-- **Why removed:** proto3 fills in defaults for omitted scalar fields. Omitting `purchase_date` sends 1970-01-01T00:00:00Z, not "missing". Test can't distinguish "missing" from "default" in proto3.
+- **为何删除：** proto3 给省略的标量字段填默认值。省略 `purchase_date`
+  会发 1970-01-01T00:00:00Z，而不是 "missing"。测试在 proto3 下
+  无法区分 "missing" 和 "default"。
 
 ### test_create_vehicle_calibrated_range[0-False]
-- **Why changed:** Production has no check on 0 (no CHECK constraint, no app validator). 0 is accepted.
+- **为何修改：** 生产代码对 0 没有校验（无 CHECK 约束，无 app validator）。
+  0 被接受。
 
 ### test_create_vehicle_battery_capacity[0.0-False]
-- **Why changed:** Same — 0.0 is accepted.
+- **为何修改：** 同上 —— 0.0 被接受。

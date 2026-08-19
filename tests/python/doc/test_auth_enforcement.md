@@ -1,36 +1,41 @@
 # test_auth_enforcement.md
 
-## Overview
-- **Service:** WeatherService (just a probe target)
-- **Total tests:** 3
-- **Purpose:** Verify evgrpc's JWT validator rejects invalid tokens.
+## 概述
+- **服务：** WeatherService（仅作为探测目标）
+- **测试总数：** 3
+- **目的：** 验证 evgrpc 的 JWT validator 能拒绝非法 token。
 
-## TestHappyPath (validation paths)
+## TestHappyPath (验证路径)
 
 ### test_no_token_returns_unauthenticated
-- **Purpose:** No `Authorization` header → UNAUTHENTICATED.
-- **Setup:** Bare insecure_channel (no Bearer interceptor).
-- **Action:** SearchWeather() with no metadata.
-- **Expected:** `grpc.StatusCode.UNAUTHENTICATED`.
+- **目的：** 没有 `Authorization` header → UNAUTHENTICATED。
+- **前置：** 裸 insecure_channel（不带 Bearer interceptor）。
+- **操作：** 调用 SearchWeather()，不带任何 metadata。
+- **预期：** `grpc.StatusCode.UNAUTHENTICATED`。
 
 ### test_malformed_token_returns_unauthenticated
-- **Purpose:** Malformed Bearer token (not a real JWT) → UNAUTHENTICATED.
-- **Action:** metadata=("authorization", "Bearer not.a.real.jwt").
-- **Expected:** UNAUTHENTICATED.
+- **目的：** 格式错误的 Bearer token（不是合法的 JWT）→ UNAUTHENTICATED。
+- **操作：** metadata=("authorization", "Bearer not.a.real.jwt")。
+- **预期：** UNAUTHENTICATED。
 
 ### test_forged_token_returns_unauthenticated
-- **Purpose:** Forged JWT signed with throwaway RSA key (real iss/aud, fake kid) → UNAUTHENTICATED.
-- **Setup:** Generate RSA-2048 key in-process; sign JWT with claims matching real IdP's iss/aud but throwaway signing key + `kid: "forged-key"`.
-- **Action:** Send SearchWeather with `Authorization: Bearer <forged>`.
-- **Expected:** UNAUTHENTICATED (server's JWT validator looks up `kid` in JWKS, doesn't find "forged-key", signature fails).
+- **目的：** 用一次性 RSA 密钥伪造的 JWT（iss/aud 是真的，但 kid 是假的）
+  → UNAUTHENTICATED。
+- **前置：** 进程内生成 RSA-2048 密钥；用与真实 IdP 相同的 iss/aud claims
+  签 JWT，但 signing key 用一次性的，kid 设为 `"forged-key"`。
+- **操作：** 带 `Authorization: Bearer <forged>` 调用 SearchWeather。
+- **预期：** UNAUTHENTICATED（服务端 JWT validator 在 JWKS 里查 `kid`，
+  找不到 "forged-key"，签名校验失败）。
 
-## Claims used (verified against real minted token)
+## 使用的 Claims（对照真实颁发的 token 验证过）
 
 - `iss = "https://auth-test.mksword.com/"`
 - `aud = "https://www.mksword.com/grpc/ev"`
-- `kid = "19C1B8A78C7648CA5DC4EAEFDEE51986991DBC51"` (real; not used in forged test — we use "forged-key")
+- `kid = "19C1B8A78C7648CA5DC4EAEFDEE51986991DBC51"`（真实 kid；
+  在 forged 测试中不使用 —— 那里用的是 "forged-key"）
 
-## NOT tested (out of scope per spec §10)
+## 未覆盖的（按 spec §10 范围之外）
 
-- RBAC / per-RPC scope enforcement (waiting on server-side scope checks).
-- Expired-token test (requires IdP admin change — can't issue short-lived tokens via the public client_credentials flow).
+- RBAC / 按 RPC 的 scope 强制（等待服务端加入 scope 检查）。
+- Expired-token 测试（需要 IdP 管理员操作 —— 公开的
+  client_credentials 流程发不出短有效期的 token）。
