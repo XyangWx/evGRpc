@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ChargingService
 - **RPCs:** CreateCharging, GetCharging, UpdateCharging, DeleteCharging, ListChargings
-- **Total tests:** 23 (was 22; +1 added in Phase A for pagination bug fix)
+- **Total tests:** 24 (was 23; +1 added in Phase D for page_size INT_MAX fix)
 - **FK deps:** every Create/Update requires a valid vehicle_id + source_category_id (UUID).
 
 ## TestHappyPath
@@ -88,3 +88,6 @@
 
 ### test_list_chargings_invalid_page_token_returns_invalid
 - **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via `std::stoi` throw caught by generic catch → default INTERNAL).
+
+### test_list_chargings_int_max_page_size_caps_to_1000
+- **Phase D fix**: page_size=INT_MAX → OK, capped to 999 (not INT_MAX overflow).

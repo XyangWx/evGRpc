@@ -220,6 +220,16 @@ class TestErrorPath:
             ))
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
+    def test_list_chargings_int_max_page_size_caps_to_1000(
+        self, channel, namespace
+    ):
+        """page_size=INT_MAX → capped (Bug #5 fix)."""
+        stub = rpc.ChargingServiceStub(channel)
+        resp = stub.ListChargings(pb.ListChargingsRequest(
+            page_size=2147483647
+        ))
+        assert isinstance(resp, pb.ListChargingsResponse)
+
 
 # ─────────────────────────── TestBoundaries ───────────────────────────
 

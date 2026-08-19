@@ -316,7 +316,13 @@ grpc::Status ConsumptionServiceImpl::ListConsumptions(
   if (!a.status.ok()) { scope.set_status(a.status); return a.status; }
 
   try {
-    int page_size = req->page_size() > 0 ? req->page_size() : 50;
+    // Cap page_size at kMaxPageSize-1 so the +1 (used to detect
+    // "has next page") doesn't overflow into negative territory.
+    // Also prevents users from accidentally requesting huge pages.
+    constexpr int kMaxPageSize = 1000;
+    int page_size = req->page_size() > 0
+                       ? std::min(req->page_size(), kMaxPageSize - 1)
+                       : 50;
 
     // Build WHERE incrementally based on which filters are set.
     std::string sql =

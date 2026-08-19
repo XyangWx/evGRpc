@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** VehicleService
 - **RPCs:** CreateVehicle, GetVehicle, UpdateVehicle, DeleteVehicle, ListVehicles
-- **Total tests:** 37 (was 34; +3 added in Phase A for pagination bug fix)
+- **Total tests:** 40 (was 37; +3 added in Phase D for page_size INT_MAX fix)
 - **Purpose:** CRUD + boundaries + UNIQUE constraint.
 
 ## TestHappyPath
@@ -138,6 +138,16 @@
 
 ### test_list_vehicles_empty_page_token_works
 - Empty token = first page (offset 0). Documented behavior.
+
+
+
+### test_list_vehicles_int_max_page_size_caps_to_1000
+- **Phase D fix**: page_size=INT_MAX (2147483647) → OK, capped to 999 (not INT_MAX overflow).
+- Bug: page_size + 1 overflowed to INT_MIN, PG returned 'LIMIT must not be negative'.
+- Fix: cap page_size at kMaxPageSize-1=999 before +1.
+
+### test_list_vehicles_negative_page_size_uses_default
+- page_size <= 0 → server uses default 50. Documents existing behavior.
 
 ## Removed (from initial plan, found invalid during implementation)
 

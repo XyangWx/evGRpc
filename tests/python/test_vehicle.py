@@ -194,6 +194,31 @@ class TestErrorPath:
         ))
         assert isinstance(resp, pb.ListVehiclesResponse)
 
+    def test_list_vehicles_int_max_page_size_caps_to_1000(
+        self, channel, namespace
+    ):
+        """page_size=INT_MAX → capped to kMaxPageSize-1=999 (not overflow).
+
+        Bug #5 (Phase D fix): page_size + 1 overflowed to INT_MIN, PG
+        returned 'LIMIT must not be negative'. Now production caps to
+        kMaxPageSize-1 to prevent overflow AND prevent large pages.
+        """
+        stub = rpc.VehicleServiceStub(channel)
+        resp = stub.ListVehicles(pb.ListVehiclesRequest(
+            page_size=2147483647
+        ))
+        # OK + returns up to 1000 vehicles (no overflow, no error)
+        assert isinstance(resp, pb.ListVehiclesResponse)
+
+    def test_list_vehicles_negative_page_size_uses_default(
+        self, channel, namespace
+    ):
+        """page_size <= 0 → server uses default 50."""
+        stub = rpc.VehicleServiceStub(channel)
+        for ps in [-1, -100, 0]:
+            resp = stub.ListVehicles(pb.ListVehiclesRequest(page_size=ps))
+            assert isinstance(resp, pb.ListVehiclesResponse)
+
 
 # ─────────────────────────── TestBoundaries ───────────────────────────
 

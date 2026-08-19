@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ConsumptionService
 - **RPCs:** CreateConsumption, GetConsumption, UpdateConsumption, DeleteConsumption, ListConsumptions
-- **Total tests:** 20 (was 19; +1 added in Phase A for pagination bug fix)
+- **Total tests:** 21 (was 20; +1 added in Phase D for page_size INT_MAX fix)
 - **FK deps:** vehicle_id (required NOT NULL); weather_id (DB nullable, but production requires non-empty — see "Constraints" below).
 
 ## TestHappyPath
@@ -75,6 +75,11 @@
 
 ### test_list_consumptions_invalid_page_token_returns_invalid
 - **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL).
+
+
+### test_list_consumptions_int_max_page_size_caps_to_1000
+- **Phase D fix**: page_size=INT_MAX → OK, capped to 999.
+
 
 ## Cross-service (Chunk 6 enables Vehicle FK-delete test)
 
