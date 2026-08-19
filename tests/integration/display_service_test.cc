@@ -82,7 +82,7 @@ TEST_F(DisplayServiceIT, GetVehicleCostSummary_HappyPath) {
 // Task 32: GetVehicleCostSummary with no data → INTERNAL "no aggregate
 // row". The production handler's precursor fix (commit 69d0d85) added
 // an EXISTS pre-check so this branch is reachable.
-TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_Internal) {
+TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_InvalidArgument) {
   const auto vid = data::CreateVehicleId(channel());
   // Note: do NOT seed data — empty DB.
   auto stub = DisplayService::NewStub(channel());
@@ -93,7 +93,9 @@ TEST_F(DisplayServiceIT, GetVehicleCostSummary_NoData_Internal) {
   VehicleCostSummary resp;
   grpc::ClientContext ctx;
   grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  // Phase 3: changed from INTERNAL to INVALID_ARGUMENT (semantically
+  // "no data matches your query", not "the server crashed").
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos)
       << st.error_message();
 }
@@ -117,10 +119,10 @@ TEST_F(DisplayServiceIT, GetMonthlyReport_HappyPath) {
   EXPECT_GT(resp.total_cost(), 0.0);
 }
 
-// Task 33: GetMonthlyReport with future year → no data → INTERNAL
+// Task 33: GetMonthlyReport with future year → no data → INVALID_ARGUMENT
 // "no aggregate row". Same branch as Task 32, reached via the
 // precursor's EXISTS pre-check on year/month/vehicle filter.
-TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_Internal) {
+TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_InvalidArgument) {
   const auto vid = data::CreateVehicleId(channel());
   auto stub = DisplayService::NewStub(channel());
   GetMonthlyReportRequest req;
@@ -130,7 +132,8 @@ TEST_F(DisplayServiceIT, GetMonthlyReport_NoData_Internal) {
   PeriodReport resp;
   grpc::ClientContext ctx;
   grpc::Status st = stub->GetMonthlyReport(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  // Phase 3: changed from INTERNAL to INVALID_ARGUMENT.
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
 }
 
@@ -152,8 +155,8 @@ TEST_F(DisplayServiceIT, GetAnnualReport_HappyPath) {
   EXPECT_GT(resp.total_cost(), 0.0);
 }
 
-// Task 34: GetAnnualReport with future year → no data → INTERNAL.
-TEST_F(DisplayServiceIT, GetAnnualReport_NoData_Internal) {
+// Task 34: GetAnnualReport with future year → no data → INVALID_ARGUMENT.
+TEST_F(DisplayServiceIT, GetAnnualReport_NoData_InvalidArgument) {
   const auto vid = data::CreateVehicleId(channel());
   auto stub = DisplayService::NewStub(channel());
   GetAnnualReportRequest req;
@@ -162,7 +165,8 @@ TEST_F(DisplayServiceIT, GetAnnualReport_NoData_Internal) {
   PeriodReport resp;
   grpc::ClientContext ctx;
   grpc::Status st = stub->GetAnnualReport(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  // Phase 3: changed from INTERNAL to INVALID_ARGUMENT.
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
 }
 
@@ -531,14 +535,15 @@ TEST_F(DisplayServiceIT, GetVehicleCostSummary_StartAfterEnd_InvalidArgument) {
   req.set_vehicle_id(vid);
   // Start = 2024-01-02 (after End = 2024-01-01). GetVehicleCostSummary
   // doesn't validate start>end explicitly — the EXISTS pre-check
-  // (Task 32 precursor) sees zero rows and returns INTERNAL
+  // (Task 32 precursor) sees zero rows and returns INVALID_ARGUMENT
   // "no aggregate row" because the time range excludes all data.
   req.mutable_start_time()->set_seconds(1704153600);
   req.mutable_end_time()->set_seconds(1704067200);
   VehicleCostSummary resp;
   grpc::ClientContext ctx;
   grpc::Status st = stub->GetVehicleCostSummary(&ctx, req, &resp);
-  EXPECT_EQ(st.error_code(), grpc::StatusCode::INTERNAL);
+  // Phase 3: changed from INTERNAL to INVALID_ARGUMENT.
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
   EXPECT_NE(st.error_message().find("no aggregate row"), std::string::npos);
 }
 
