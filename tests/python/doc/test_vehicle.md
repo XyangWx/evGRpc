@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** VehicleService
 - **RPCs:** CreateVehicle, GetVehicle, UpdateVehicle, DeleteVehicle, ListVehicles
-- **Total tests:** 34 (was 25; +9 added in Phase 2 round-2 review)
+- **Total tests:** 37 (was 34; +3 added in Phase A for pagination bug fix)
 - **Purpose:** CRUD + boundaries + UNIQUE constraint.
 
 ## TestHappyPath
@@ -126,6 +126,18 @@
 - **FK constraint:** Consumption.VehicleId REFERENCES vehicle(Id). PG default NO ACTION.
 - Per `error.cc`: `foreign_key_violation` → `INVALID_ARGUMENT` (not FAILED_PRECONDITION — fixed in round-1 review).
 - **Action plan:** Chunk 6 Step 3 removes the `@pytest.mark.skip` decorator.
+
+
+
+### test_list_vehicles_invalid_page_token_returns_invalid
+- **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL).
+- `std::stoi` throws `std::invalid_argument` on non-numeric input, falls through `error.cc` to default INTERNAL. Now uses `ParsePageToken` helper.
+
+### test_list_vehicles_overflow_page_token_returns_invalid
+- page_token > INT_MAX → INVALID_ARGUMENT (was INTERNAL via `std::out_of_range`).
+
+### test_list_vehicles_empty_page_token_works
+- Empty token = first page (offset 0). Documented behavior.
 
 ## Removed (from initial plan, found invalid during implementation)
 

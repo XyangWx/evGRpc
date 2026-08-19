@@ -155,6 +155,45 @@ class TestErrorPath:
             stub.DeleteVehicle(pb.DeleteVehicleRequest(id=make_uuid()))
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
+    def test_list_vehicles_invalid_page_token_returns_invalid(
+        self, channel, namespace
+    ):
+        """Non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via stoi throw).
+
+        Phase A fix: `std::stoi` throws `invalid_argument` on non-numeric
+        input, which falls through `error.cc` to default INTERNAL.
+        Production now uses `ParsePageToken` which returns INVALID_ARGUMENT
+        with a clear message.
+        """
+        stub = rpc.VehicleServiceStub(channel)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.ListVehicles(pb.ListVehiclesRequest(
+                page_size=10, page_token="not_a_number"
+            ))
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        assert "page_token" in exc.value.details()
+
+    def test_list_vehicles_overflow_page_token_returns_invalid(
+        self, channel, namespace
+    ):
+        """page_token > INT_MAX → INVALID_ARGUMENT (was INTERNAL via out_of_range)."""
+        stub = rpc.VehicleServiceStub(channel)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.ListVehicles(pb.ListVehiclesRequest(
+                page_size=10, page_token="9999999999999999"
+            ))
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_list_vehicles_empty_page_token_works(
+        self, channel, namespace
+    ):
+        """Empty page_token = first page (offset 0). Documented behavior."""
+        stub = rpc.VehicleServiceStub(channel)
+        resp = stub.ListVehicles(pb.ListVehiclesRequest(
+            page_size=5, page_token=""
+        ))
+        assert isinstance(resp, pb.ListVehiclesResponse)
+
 
 # ─────────────────────────── TestBoundaries ───────────────────────────
 

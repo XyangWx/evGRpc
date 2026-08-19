@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ChargingService
 - **RPCs:** CreateCharging, GetCharging, UpdateCharging, DeleteCharging, ListChargings
-- **Total tests:** 22 (was 17; +5 added in Phase 2 round-2 review)
+- **Total tests:** 23 (was 22; +1 added in Phase A for pagination bug fix)
 - **FK deps:** every Create/Update requires a valid vehicle_id + source_category_id (UUID).
 
 ## TestHappyPath
@@ -85,3 +85,6 @@
 
 ### test_create_charging_charger_type_unspecified_returns_invalid
 - **App validation (Phase 3 fix):** `ValidateCharging` rejects UNSPECIFIED with INVALID_ARGUMENT. Without this, ChargerTypeLabel('') → NOT NULL violation → INTERNAL (far less helpful).
+
+### test_list_chargings_invalid_page_token_returns_invalid
+- **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via `std::stoi` throw caught by generic catch → default INTERNAL).

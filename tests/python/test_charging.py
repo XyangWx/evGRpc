@@ -209,6 +209,17 @@ class TestErrorPath:
             stub.DeleteCharging(pb.DeleteChargingRequest(id=make_uuid()))
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
+    def test_list_chargings_invalid_page_token_returns_invalid(
+        self, channel, namespace
+    ):
+        """Non-numeric page_token → INVALID_ARGUMENT (was INTERNAL via stoi throw)."""
+        stub = rpc.ChargingServiceStub(channel)
+        with pytest.raises(grpc.RpcError) as exc:
+            stub.ListChargings(pb.ListChargingsRequest(
+                page_size=10, page_token="abc"
+            ))
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
 
 # ─────────────────────────── TestBoundaries ───────────────────────────
 

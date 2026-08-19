@@ -5,6 +5,7 @@ add_library(evgrpc_util
   args.cc
   last_day_of_month.cc
   timestamp_parse.cc
+  page_token_parse.cc
 )
 target_link_libraries(evgrpc_util PUBLIC
   evgrpc_log

@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ConsumptionService
 - **RPCs:** CreateConsumption, GetConsumption, UpdateConsumption, DeleteConsumption, ListConsumptions
-- **Total tests:** 19 (was 14; +4 in Phase 2, +1 in Phase 3 for UpdateConsumption empty weather_id)
+- **Total tests:** 20 (was 19; +1 added in Phase A for pagination bug fix)
 - **FK deps:** vehicle_id (required NOT NULL); weather_id (DB nullable, but production requires non-empty — see "Constraints" below).
 
 ## TestHappyPath
@@ -70,6 +70,11 @@
 
 ### test_update_consumption_empty_weather_id_returns_invalid
 - **UpdateConsumption** uses the same `ValidateConsumption` (via a constructed CreateConsumptionRequest-shaped view). Adding this test confirmed the fix works in the update path too.
+
+
+
+### test_list_consumptions_invalid_page_token_returns_invalid
+- **Phase A fix**: non-numeric page_token → INVALID_ARGUMENT (was INTERNAL).
 
 ## Cross-service (Chunk 6 enables Vehicle FK-delete test)
 

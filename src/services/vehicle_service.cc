@@ -5,6 +5,7 @@
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "db/exec.h"
+#include "util/page_token_parse.h"
 #include "util/rpc_scope.h"
 #include "util/uuid.h"
 
@@ -191,9 +192,9 @@ grpc::Status VehicleServiceImpl::ListVehicles(
   try {
     int page_size = req->page_size() > 0 ? req->page_size() : 50;
     int offset = 0;
-    if (!req->page_token().empty()) {
-      offset = std::stoi(req->page_token());
-      if (offset < 0) offset = 0;
+    if (auto s = ParsePageToken(req->page_token(), &offset); !s.ok()) {
+      scope.set_status(s);
+      return s;
     }
     // Fetch page_size+1 rows so we can tell "has next page" without
     // a separate COUNT(*) round-trip.

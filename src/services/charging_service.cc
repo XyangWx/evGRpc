@@ -8,6 +8,7 @@
 #include "db/exec.h"
 #include "log/log.h"
 #include "services/charger/charger_type.h"
+#include "util/page_token_parse.h"
 #include "util/rpc_scope.h"
 #include "util/timestamp_parse.h"
 #include "util/uuid.h"
@@ -384,9 +385,9 @@ grpc::Status ChargingServiceImpl::ListChargings(
       p.append(req->source_category_id());
     }
     int offset = 0;
-    if (!req->page_token().empty()) {
-      offset = std::stoi(req->page_token());
-      if (offset < 0) offset = 0;
+    if (auto s = ParsePageToken(req->page_token(), &offset); !s.ok()) {
+      scope.set_status(s);
+      return s;
     }
     sql += " ORDER BY StartTime DESC LIMIT $" +
            std::to_string(p.size() + 1) +
