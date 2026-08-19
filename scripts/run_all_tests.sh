@@ -116,13 +116,32 @@ run_suite "integration (evgrpc_integration_tests, 95 cases)" \
 run_suite "e2e (evgrpc_e2e_tests, 2 cases)" \
   "./cmake-build-debug/tests/integration/evgrpc_e2e_tests"
 
-# 4. Python gRPC integration tests (pytest, ~99 cases).
+# 4. Python gRPC integration tests (pytest, ~129 cases).
 # Assumes `evgrpc-tests` conda env exists (created via `conda env create
 # -f environment.yml`). Hits the docker-compose stack via the Bearer-token
 # helper; namespace prefix isolates test rows. Auto-skips if IdP or
 # docker-compose unreachable.
-run_suite "python gRPC IT (pytest, ~99 cases)" \
-  "conda run -n evgrpc-tests pytest tests/python/ --tb=short -q"
+# Note: locate conda on PATH (macOS/Linux default installer puts it at
+# /home/$USER/anaconda3 OR /home/$USER/.local/anaconda3 OR /opt/conda).
+CONDA_BIN=""
+for candidate in \
+  "$HOME/anaconda3/bin/conda" \
+  "$HOME/.local/anaconda3/bin/conda" \
+  "/opt/conda/bin/conda" \
+  "/usr/local/anaconda3/bin/conda"; do
+  if [[ -x "$candidate" ]]; then CONDA_BIN="$candidate"; break; fi
+done
+if [[ -z "$CONDA_BIN" ]] && command -v conda >/dev/null; then
+  CONDA_BIN="$(command -v conda)"
+fi
+if [[ -n "$CONDA_BIN" ]]; then
+  run_suite "python gRPC IT (pytest, ~129 cases)" \
+    "$CONDA_BIN run -n evgrpc-tests pytest tests/python/ --tb=short -q"
+else
+  echo ">>> Skipping python gRPC IT: conda not found on PATH."
+  echo "    Set CONDA_BIN or install conda + create evgrpc-tests env."
+  RESULTS+=("SKIP  python gRPC IT  (conda not found)")
+fi
 
 # 5. Coverage gate (optional — needs DATABASE_URL).
 if (( DO_COVERAGE )); then
