@@ -84,6 +84,37 @@ respects FK NO ACTION:
 The suite is wired into `./scripts/run_all_tests.sh` as suite 4
 (between e2e and coverage gate).
 
+
+
+## Development
+
+### Pre-commit hook
+
+A pre-commit hook checks `.cc/.h` formatting (clang-format), `.py` syntax,
+JSON validity, and shellcheck on staged files.
+
+Install:
+
+```sh
+ln -s ../../scripts/pre-commit.sh .git/hooks/pre-commit
+```
+
+Or copy `scripts/pre-commit.sh` into `.git/hooks/pre-commit`.
+
+Required tools (with apt-get install suggestions):
+- `clang-format` (apt: `apt install clang-format`, brew: `brew install clang-format`)
+- `python3` (already present)
+- `shellcheck` (apt: `apt install shellcheck`, brew: `brew install shellcheck`)
+
+The hook gracefully skips checks for missing tools (with a warning).
+
+### Clang-format
+
+`.clang-format` at the repo root defines the C++ style (2-space indent,
+100 column, K&R braces, Allman for namespaces, right pointer alignment).
+
+Apply with `clang-format -i --style=file <files>`.
+
 ## Coverage
 
 Run the integration test suite with coverage instrumentation:
