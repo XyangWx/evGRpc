@@ -23,6 +23,16 @@
 ### test_get_vehicle_cost_summary_empty_vehicle_id_returns_invalid
 - Validator: vehicle_id is required → INVALID_ARGUMENT.
 
+## TestHappyPathWithSeed
+
+### test_get_vehicle_cost_summary_with_seeded_data_returns_totals
+- **RPC:** GetVehicleCostSummary with REAL seeded data
+- **Purpose:** Verify the aggregation pipeline (PG → C++ → proto) doesn't drop data on the way to the response.
+- **Setup:** Create 1 vehicle + 1 weather + 1 source_category + 2 charging rows + 1 consumption row with known values (kwh=30+40=70, cost=35+50=85, mileage delta=100km).
+- **Action:** Call GetVehicleCostSummary with the vehicle_id and a date range covering all seeded data.
+- **Expected:** total_kwh=70, total_cost=85, avg_yuan_per_kwh=85/70≈1.214, avg_yuan_per_km=85/100=0.85.
+- **Critical implementation note:** The query MUST run inside both the `with TrackedInsert(conn, "charging")` and `with TrackedInsert(conn, "consumption")` blocks so neither `__exit__` cleans up the rows before the query reads them. The consumption block is nested inside the charging block so they're all alive at query time.
+
 ## TestErrorPath
 
 ### test_get_daily_charging_report_year_too_low_returns_invalid
