@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** DisplayService
 - **RPCs:** 11 (3 v1.1.0 charging reports + 8 others)
-- **Total tests:** 39 (was 37; +2 added in Phase B for GetRangeAccuracy + GetTemperatureConsumptionCorrelation)
+- **Total tests:** 41 (was 39; +2 added in Phase F for legacy GetMonthlyReport / GetAnnualReport)
 - **Strategy:** Focus on validation paths + empty-data responses for v1.1.0 RPCs (COALESCE-on-empty returns zeros). Legacy RPCs fire INTERNAL on empty data — documented, not seeded.
 
 ## TestHappyPath (v1.1.0 charging reports + VehicleCostSummary)
@@ -58,6 +58,14 @@
 ### test_get_temperature_consumption_correlation_with_seeded_data_returns_buckets
 - 2 consumption rows with different avg_temps (25°C and 5°C); query → 2 buckets ("20-30", "0-10"),
   each with sample_count=1.
+
+### test_get_monthly_report_with_seeded_data_returns_totals
+- Legacy GetMonthlyReport: 2 charging rows + 1 consumption row (100 km mileage) for 2024-06.
+  Returns total_cost=70, total_kwh=60, total_km=100.
+
+### test_get_annual_report_with_seeded_data_across_months
+- Legacy GetAnnualReport: 3 charging rows across Jan/Feb/Mar 2024 + 1 consumption row (200 km).
+  Returns month=0 (annual sentinel), total_cost=75, total_kwh=60, total_km=200.
 
 ## TestErrorPath
 

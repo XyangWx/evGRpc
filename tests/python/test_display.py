@@ -789,6 +789,98 @@ class TestHappyPathWithSeed:
                 assert by_label["20-30"].sample_count == 1
                 assert by_label["0-10"].sample_count == 1
 
+    def test_get_monthly_report_with_seeded_data_returns_totals(
+        self, channel, namespace, pg_conn
+    ):
+        """Legacy GetMonthlyReport with REAL seeded charging + consumption.
+
+        Verifies the 2-subquery aggregation (charging + consumption)
+        and the EXISTS pre-check (Phase 3 fix → INVALID_ARGUMENT for
+        no-data, but here we have data so it returns OK).
+        """
+        from datetime import timedelta
+        from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, wid, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+                base_date=(2024, 6, 15),
+            )
+            # Create 1 consumption row with 100km mileage for 2024-06
+            cn_stub = cn_rpc.ConsumptionServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                start = datetime(2024, 6, 16, 8, 0, 0)
+                end = start + timedelta(hours=2)
+                c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start, end=end,
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10100,
+                    begin_range_km=320, end_range_km=160,
+                    highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                    weather_id=wid, remark="monthly-report",
+                    # +1 to skip begin_percent >= end_percent validation
+                ))
+                co_ti.register(c.id)
+                resp = d_stub.GetMonthlyReport(pb.GetMonthlyReportRequest(
+                    year=2024, month=6,
+                ))
+                assert resp.year == 2024
+                assert resp.month == 6
+                # charging: 2 rows * 35.0 = 70.0 cost, 2 * 30.0 = 60.0 kwh
+                assert resp.total_cost == pytest.approx(70.0, abs=0.01)
+                assert resp.total_kwh == pytest.approx(60.0, abs=0.01)
+                # consumption: end_mileage - begin_mileage = 10100 - 10000 = 100 km
+                assert resp.total_km == pytest.approx(100.0, abs=0.01)
+
+    def test_get_annual_report_with_seeded_data_across_months(
+        self, channel, namespace, pg_conn
+    ):
+        """Legacy GetAnnualReport with 3 charging rows across 3 months.
+
+        Verifies the EXTRACT(YEAR) aggregation across months (no
+        EXTRACT(MONTH) filter — month=0 means annual per spec).
+        """
+        from datetime import timedelta
+        from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, wid, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=3, kwh_per=20.0, cost_per=25.0,
+                base_date=(2024, 1, 15),  # 3 rows: Jan, Feb, Mar (consecutive days)
+            )
+            cn_stub = cn_rpc.ConsumptionServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                start = datetime(2024, 2, 20, 8, 0, 0)
+                c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start, end=start + timedelta(hours=2),
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10200,
+                    begin_range_km=300, end_range_km=100,
+                    highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                    weather_id=wid, remark="annual-report",
+                ))
+                co_ti.register(c.id)
+                resp = d_stub.GetAnnualReport(pb.GetAnnualReportRequest(
+                    year=2024,
+                ))
+                assert resp.year == 2024
+                assert resp.month == 0  # 0 = annual sentinel
+                # charging: 3 rows * 25.0 = 75.0 cost, 3 * 20.0 = 60.0 kwh
+                assert resp.total_cost == pytest.approx(75.0, abs=0.01)
+                assert resp.total_kwh == pytest.approx(60.0, abs=0.01)
+                # consumption: 10200 - 10000 = 200 km
+                assert resp.total_km == pytest.approx(200.0, abs=0.01)
+
 
 class TestConstraints:
     def test_get_monthly_charging_report_with_specific_vehicle(
