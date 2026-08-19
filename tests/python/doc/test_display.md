@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** DisplayService
 - **RPCs:** 11 (3 v1.1.0 charging reports + 8 others)
-- **Total tests:** 41 (was 39; +2 added in Phase F for legacy GetMonthlyReport / GetAnnualReport)
+- **Total tests:** 42 (was 41; +1 Phase Q regression for explicit 1970-01-01 filter)
 - **Strategy:** Focus on validation paths + empty-data responses for v1.1.0 RPCs (COALESCE-on-empty returns zeros). Legacy RPCs fire INTERNAL on empty data — documented, not seeded.
 
 ## TestHappyPath (v1.1.0 charging reports + VehicleCostSummary)
@@ -131,6 +131,13 @@
 
 ### test_get_temperature_consumption_correlation_empty_returns_zero
 - Returns response, 0 buckets.
+
+### test_vehicle_cost_summary_explicit_1970_01_01_uses_filter
+- **Phase Q regression**: explicit 1970-01-01T00:00:00Z timestamp should be a real filter, not silently dropped as 'unset'.
+- Before fix: `MaybeTimestamp` used `seconds() == 0 && nanos() == 0` heuristic, which is indistinguishable from proto3 default (unset). User explicitly setting `start_time=1970-01-01` to fetch 'all data' would silently get an unfiltered query.
+- After fix: `MaybeTimestamp` takes a `bool has_value` parameter from the parent message's `has_<field>()` method (`req->has_start_time()`). Now `has_value=true + seconds=0` correctly means "explicit 1970" and the filter applies.
+- Seed: 1 charging at 2024-06-15 + 1 consumption at 2024-06-16 with 100 km delta.
+- Assert: `avg_yuan_per_km ≈ 0.35` (= 35 / 100, with filter from 1970 inclusive).
 
 ## TZ-awareness notes
 
