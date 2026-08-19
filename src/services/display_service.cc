@@ -9,25 +9,21 @@
 #include "db/exec.h"
 #include "services/charger/charger_type.h"
 #include "util/last_day_of_month.h"
+#include "util/maybe_timestamp.h"
 #include "util/rpc_scope.h"
 
 namespace evgrpc {
 
 namespace {
 
-// proto Timestamp -> ISO 8601 string for binding to TIMESTAMP column.
-std::string TimestampString(const google::protobuf::Timestamp& ts) {
-  return google::protobuf::util::TimeUtil::ToString(ts);
-}
-
-// Returns nullopt when the proto Timestamp is unset (has_timestamp() ==
-// false). libpqxx binds std::optional<std::string> as either the value
-// or NULL — lets us write one query that handles "filter not set".
-std::optional<std::string> MaybeTimestamp(
-    const google::protobuf::Timestamp& ts) {
-  if (ts.seconds() == 0 && ts.nanos() == 0) return std::nullopt;
-  return TimestampString(ts);
-}
+// Returns nullopt when the proto Timestamp field is unset. The first
+// argument must be the result of the parent message's
+// `has_<field_name>()` (e.g., `req->has_start_time()` for the
+// start_time field of a GetXxxRequest). This correctly distinguishes
+// "unset" from "explicitly set 1970-01-01" — the previous heuristic
+// `seconds() == 0 && nanos() == 0` could not, since both have the
+// same wire value.
+// (See src/util/maybe_timestamp.h for the full rationale.)
 
 }  // namespace
 
@@ -53,8 +49,8 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
     // Reachable-INTERNAL pre-check: the aggregation CTE below always
     // returns 1 row (via COALESCE-on-empty-set), so `result.empty()`
     // is unreachable through the public API. This EXISTS pre-check
@@ -298,8 +294,8 @@ grpc::Status DisplayServiceImpl::GetCostByChargerType(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
 
     // GROUP BY ChargerType. CAST to CHARGER_TYPE_ENUM is a no-op
     // identity (it's already typed), but the SUMs need DOUBLE PRECISION
@@ -356,8 +352,8 @@ grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
 
     // JOIN charging ⨝ source_category to get the category name.
     // GROUP BY source_category so each row = one breakdown.
@@ -419,8 +415,8 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
 
     // Per-vehicle totals from consumption.
     auto km_rows = db::Exec(tx,
@@ -493,8 +489,8 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
 
     // Dashboard range: SUM(BeginRange - EndRange) over charging
     // (per spec: "dashboard_range_total_km" = sum of ranges the car
@@ -565,8 +561,8 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
   try {
     auto conn = pool_->acquire();
     pqxx::nontransaction tx(*conn);
-    auto start_ts = MaybeTimestamp(req->start_time());
-    auto end_ts = MaybeTimestamp(req->end_time());
+    auto start_ts = MaybeTimestamp(req->has_start_time(), req->start_time());
+    auto end_ts = MaybeTimestamp(req->has_end_time(), req->end_time());
 
     // Per consumption event:
     //   - avg_temp = (HighestTemperature + LowestTemperature) / 2

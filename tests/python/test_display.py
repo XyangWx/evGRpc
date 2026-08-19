@@ -972,3 +972,111 @@ class TestConstraints:
             )
         )
         assert isinstance(resp, pb.GetTemperatureConsumptionCorrelationResponse)
+class TestTimestampBoundary:
+    """Phase Q regression: explicit 1970-01-01 must NOT be treated as 'unset'.
+
+    The proto3 default Timestamp (seconds=0, nanos=0) is indistinguishable
+    from an EXPLICITLY-set 1970-01-01T00:00:00Z if you only check the
+    field values. The Phase Q fix moves the 'unset' check to use the
+    parent message's has_<field>() method.
+    """
+
+    def test_vehicle_cost_summary_explicit_1970_01_01_uses_filter(
+        self, channel, namespace, pg_conn
+    ):
+        """Setting start_time=1970-01-01T00:00:00Z should filter the query,
+        not be silently dropped as 'unset'.
+        """
+        from datetime import datetime
+        from google.protobuf.timestamp_pb2 import Timestamp
+        from tests.python._helpers import (
+            make_license_plate, make_source_category_name, make_weather_name,
+        )
+        from tests.python.gen.evgrpc.display_pb2 import GetVehicleCostSummaryRequest
+        from tests.python.gen.evgrpc.vehicle_pb2 import CreateVehicleRequest
+        from tests.python.gen.evgrpc.vehicle_pb2_grpc import VehicleServiceStub
+        from tests.python.gen.evgrpc.weather_pb2 import CreateWeatherRequest
+        from tests.python.gen.evgrpc.weather_pb2_grpc import WeatherServiceStub
+        from tests.python.gen.evgrpc.source_category_pb2 import (
+            CreateSourceCategoryRequest,
+        )
+        from tests.python.gen.evgrpc.source_category_pb2_grpc import (
+            SourceCategoryServiceStub,
+        )
+        from tests.python.gen.evgrpc.consumption_pb2 import (
+            CreateConsumptionRequest,
+        )
+        from tests.python.gen.evgrpc.consumption_pb2_grpc import (
+            ConsumptionServiceStub,
+        )
+
+        v_stub = VehicleServiceStub(channel)
+        w_stub = WeatherServiceStub(channel)
+        sc_stub = SourceCategoryServiceStub(channel)
+        cn_stub = ConsumptionServiceStub(channel)
+        d_stub = rpc.DisplayServiceStub(channel)
+
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti, \
+             TrackedInsert(pg_conn, "consumption") as co_ti:
+            vid = v_stub.CreateVehicle(CreateVehicleRequest(
+                brand="test", calibrated_range_km=400, battery_capacity_kwh=75.0,
+                purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+                license_plate=make_license_plate(namespace),
+            )).id
+            v_ti.register(vid)
+            wid = w_stub.CreateWeather(CreateWeatherRequest(
+                name=make_weather_name(namespace)
+            )).id
+            w_ti.register(wid)
+            scid = sc_stub.CreateSourceCategory(CreateSourceCategoryRequest(
+                name=make_source_category_name(namespace)
+            )).id
+            sc_ti.register(scid)
+            # The GetVehicleCostSummary EXISTS pre-check looks at
+            # `charging` only — needs a charging row to pass.
+            from tests.python.gen.evgrpc.charging_pb2 import (
+                CreateChargingRequest, CHARGER_TYPE_FAST,
+            )
+            from tests.python.gen.evgrpc.charging_pb2_grpc import (
+                ChargingServiceStub,
+            )
+            c_stub = ChargingServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                from datetime import timedelta
+                c_charging = c_stub.CreateCharging(CreateChargingRequest(
+                    vehicle_id=vid, start_time=datetime(2024, 6, 15, 10, 0, 0),
+                    end_time=datetime(2024, 6, 15, 11, 0, 0),
+                    start_percent=20, end_percent=80,
+                    start_mileage_km=10000, end_mileage_km=10100,
+                    kwh_charged=30.0, cost=35.0, electricity_unit_price=1.0,
+                    charger_type=CHARGER_TYPE_FAST, source_category_id=scid,
+                    location="loc", remark="phase-q",
+                ))
+                c_ti.register(c_charging.id)
+                start = datetime(2024, 6, 16, 8, 0, 0)
+                c = cn_stub.CreateConsumption(CreateConsumptionRequest(
+                    vehicle_id=vid, start=start, end=start + timedelta(hours=2),
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10100,
+                    begin_range_km=320, end_range_km=160,
+                    highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                    weather_id=wid, remark="phase-q-test",
+                ))
+                co_ti.register(c.id)
+                # Phase Q regression: explicit 1970-01-01 must use filter
+                # (before fix: treated as unset, no filter applied → would
+                # still match 2024-06-15 by accident, but in OTHER cases
+                # where only PRE-1970 data exists, behavior would diverge).
+                ts = Timestamp()
+                ts.FromDatetime(datetime(1970, 1, 1, 0, 0, 0))
+                resp = d_stub.GetVehicleCostSummary(pb.GetVehicleCostSummaryRequest(
+                    vehicle_id=vid,
+                    start_time=ts,
+                ))
+                # 100 km mileage from consumption row at 2024-06-16 (>= 1970)
+                # VehicleCostSummary doesn't have total_km field directly,
+                # but avg_yuan_per_km = total_cost / total_km = 35 / 100 = 0.35
+                assert resp.avg_yuan_per_km == pytest.approx(0.35, abs=0.01)
