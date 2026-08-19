@@ -23,6 +23,7 @@ add_executable(evgrpc_tests
   unit/test_last_day_of_month.cc
   unit/test_timestamp_parse.cc
   unit/test_charging_report_tz.cc
+  unit/test_page_token_parse.cc
 )
 target_link_libraries(evgrpc_tests PRIVATE
   gtest
