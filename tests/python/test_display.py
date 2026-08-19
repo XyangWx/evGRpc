@@ -110,6 +110,85 @@ class TestHappyPath:
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
+# ─────────────────────────── Helpers ───────────────────────────
+
+def _seed_vehicle_with_chargings(
+    channel, namespace, pg_conn,
+    v_ti, w_ti, sc_ti, c_ti, *,
+    n_chargings=2, charger_type=None, kwh_per=30.0, cost_per=35.0,
+    base_date=(2024, 6, 15), base_hour=10, duration_hours=1,
+):
+    """Create vehicle + weather + source_category + N charging rows.
+
+    IMPORTANT: caller controls cleanup. Helper registers rows in caller-
+    provided TrackedInsert instances. This lets the caller run assertions
+    INSIDE the with-blocks (where rows are still alive).
+
+    v_ti, w_ti, sc_ti, c_ti are the caller's TrackedInsert instances
+    for vehicle, weather, source_category, charging respectively.
+
+    Returns (vid, wid, scid, d_stub).
+    """
+    from datetime import datetime, timedelta
+    from tests.python._helpers import (
+        make_license_plate, make_source_category_name, make_weather_name,
+    )
+    from tests.python.gen.evgrpc import vehicle_pb2 as v_pb
+    from tests.python.gen.evgrpc import vehicle_pb2_grpc as v_rpc
+    from tests.python.gen.evgrpc import weather_pb2 as w_pb
+    from tests.python.gen.evgrpc import weather_pb2_grpc as w_rpc
+    from tests.python.gen.evgrpc import source_category_pb2 as sc_pb
+    from tests.python.gen.evgrpc import source_category_pb2_grpc as sc_rpc
+    from tests.python.gen.evgrpc import charging_pb2 as c_pb
+    from tests.python.gen.evgrpc import charging_pb2_grpc as c_rpc
+
+    v_stub = v_rpc.VehicleServiceStub(channel)
+    w_stub = w_rpc.WeatherServiceStub(channel)
+    sc_stub = sc_rpc.SourceCategoryServiceStub(channel)
+    c_stub = c_rpc.ChargingServiceStub(channel)
+    d_stub = rpc.DisplayServiceStub(channel)
+
+    vid = v_stub.CreateVehicle(v_pb.CreateVehicleRequest(
+        brand="test", calibrated_range_km=400, battery_capacity_kwh=75.0,
+        purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+        license_plate=make_license_plate(namespace),
+    )).id
+    v_ti.register(vid)
+    wid = w_stub.CreateWeather(w_pb.CreateWeatherRequest(
+        name=make_weather_name(namespace)
+    )).id
+    w_ti.register(wid)
+    scid = sc_stub.CreateSourceCategory(sc_pb.CreateSourceCategoryRequest(
+        name=make_source_category_name(namespace)
+    )).id
+    sc_ti.register(scid)
+
+    if charger_type is None:
+        charger_type = c_pb.CHARGER_TYPE_FAST
+
+    for i in range(n_chargings):
+        # Offset start time by (i * duration_hours) hours so multiple
+        # rows fit on the same day when duration_hours < 24/day.
+        # Default (duration_hours=1) gives rows on consecutive days.
+        start = datetime(base_date[0], base_date[1], base_date[2], base_hour, 0, 0) + timedelta(hours=i * duration_hours)
+        end = start + timedelta(hours=duration_hours)
+        c = c_stub.CreateCharging(c_pb.CreateChargingRequest(
+            vehicle_id=vid, start_time=start, end_time=end,
+            start_percent=20, end_percent=80,
+            start_mileage_km=10000 + i * 100,
+            end_mileage_km=10050 + i * 100,
+            kwh_charged=kwh_per,
+            cost=cost_per,
+            electricity_unit_price=1.10,
+            charger_type=charger_type,
+            source_category_id=scid,
+            location="loc", remark="seeded",
+        ))
+        c_ti.register(c.id)
+
+    return vid, wid, scid, d_stub
+
+
 # ─────────────────────────── TestErrorPath ───────────────────────────
 
 class TestErrorPath:
@@ -423,6 +502,185 @@ class TestHappyPathWithSeed:
                     # Mileage from consumption: 10200 - 10100 = 100 km
                     # avg_yuan_per_km = total_cost / total_km = 85 / 100 = 0.85
                     assert resp.avg_yuan_per_km == pytest.approx(85.0 / 100.0, abs=0.01)
+
+    def test_get_monthly_charging_report_with_seeded_data_returns_totals(
+        self, channel, namespace, pg_conn
+    ):
+        """With 2 charging rows on 2024-06-15 + 16, monthly report for 2024-06 = totals > 0.
+
+        All assertions run INSIDE the outer with-blocks so the rows still exist.
+        """
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, _, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+            )
+            resp = d_stub.GetMonthlyChargingReport(
+                pb.GetMonthlyChargingReportRequest(year=2024, month=6)
+            )
+            assert resp.year == 2024
+            assert resp.month == 6
+            assert resp.count == 2
+            assert resp.total_kwh == pytest.approx(60.0, abs=0.01)
+            assert resp.total_cost == pytest.approx(70.0, abs=0.01)
+
+    def test_get_annual_charging_report_with_seeded_data_returns_totals(
+        self, channel, namespace, pg_conn
+    ):
+        """With 3 charging rows across the year, annual report = totals > 0."""
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, _, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=3, kwh_per=20.0, cost_per=25.0,
+                base_date=(2024, 3, 1),
+            )
+            resp = d_stub.GetAnnualChargingReport(
+                pb.GetAnnualChargingReportRequest(year=2024)
+            )
+            assert resp.year == 2024
+            assert resp.month == 0
+            assert resp.count == 3
+            assert resp.total_kwh == pytest.approx(60.0, abs=0.01)
+            assert resp.total_cost == pytest.approx(75.0, abs=0.01)
+
+    def test_get_daily_charging_report_with_seeded_data_returns_count(
+        self, channel, namespace, pg_conn
+    ):
+        """With 2 charging rows on 2024-06-15, daily report = count 2, kwh 60."""
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            # Both rows on the same day (offset by hours, not days).
+            vid, _, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+                base_date=(2024, 6, 15), base_hour=8,
+                duration_hours=4,  # 08-12, 12-16 — same day
+            )
+            resp = d_stub.GetDailyChargingReport(
+                pb.GetDailyChargingReportRequest(year=2024, month=6, day=15)
+            )
+            assert resp.day == 15
+            assert resp.count == 2
+            assert resp.total_kwh == pytest.approx(60.0, abs=0.01)
+            assert resp.total_cost == pytest.approx(70.0, abs=0.01)
+
+    def test_get_cost_by_charger_type_with_seeded_data_returns_breakdown(
+        self, channel, namespace, pg_conn
+    ):
+        """Seed 2 FAST charging rows for one vehicle.
+
+        Verify GetCostByChargerType returns 1 breakdown (FAST) with the
+        summed totals.
+        """
+        from tests.python.gen.evgrpc import charging_pb2 as c_pb
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, _, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+                charger_type=c_pb.CHARGER_TYPE_FAST,
+            )
+            resp = d_stub.GetCostByChargerType(pb.GetCostByChargerTypeRequest(
+                vehicle_id=vid,
+                start_time=datetime(2024, 1, 1),
+                end_time=datetime(2024, 12, 31),
+            ))
+            assert len(resp.breakdowns) == 1
+            b = resp.breakdowns[0]
+            assert b.charger_type == c_pb.CHARGER_TYPE_FAST
+            assert b.total_cost == pytest.approx(70.0, abs=0.01)
+            assert b.total_kwh == pytest.approx(60.0, abs=0.01)
+            assert b.avg_yuan_per_kwh == pytest.approx(70.0 / 60.0, abs=0.01)
+
+    def test_get_cost_by_source_category_with_seeded_data_returns_breakdown(
+        self, channel, namespace, pg_conn
+    ):
+        """Seed 2 charging rows for one source_category.
+
+        Verify GetCostBySourceCategory returns 1 breakdown with summed totals.
+        """
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, _, scid, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+            )
+            resp = d_stub.GetCostBySourceCategory(pb.GetCostBySourceCategoryRequest(
+                vehicle_id=vid,
+                start_time=datetime(2024, 1, 1),
+                end_time=datetime(2024, 12, 31),
+            ))
+            assert len(resp.breakdowns) == 1
+            b = resp.breakdowns[0]
+            assert b.source_category_id == scid
+            assert b.total_cost == pytest.approx(70.0, abs=0.01)
+            assert b.total_kwh == pytest.approx(60.0, abs=0.01)
+
+    def test_get_consumption_efficiency_with_seeded_data_returns_efficiency(
+        self, channel, namespace, pg_conn
+    ):
+        """Seed 2 charging rows + 1 consumption row.
+
+        Verify GetConsumptionEfficiency returns 1 efficiency row with
+        km/kwh ratio matching the seeded data.
+        """
+        from datetime import timedelta
+        from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, wid, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=30.0, cost_per=35.0,
+                base_date=(2024, 6, 15),
+            )
+            cn_stub = cn_rpc.ConsumptionServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                start = datetime(2024, 6, 16, 8, 0, 0)
+                end = start + timedelta(hours=2)
+                c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start, end=end,
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10100,
+                    begin_range_km=320, end_range_km=160,
+                    highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                    weather_id=wid, remark="efficiency-test",
+                ))
+                co_ti.register(c.id)
+                resp = d_stub.GetConsumptionEfficiency(
+                    pb.GetConsumptionEfficiencyRequest(
+                        vehicle_id=vid,
+                        start_time=datetime(2024, 1, 1),
+                        end_time=datetime(2024, 12, 31),
+                    )
+                )
+                assert len(resp.efficiencies) == 1
+                e = resp.efficiencies[0]
+                assert e.vehicle_id == vid
+                assert e.total_kwh == pytest.approx(60.0, abs=0.01)
+                assert e.total_km == pytest.approx(100.0, abs=0.01)
+                assert e.km_per_kwh == pytest.approx(100.0 / 60.0, abs=0.01)
+                assert e.kwh_per_100km == pytest.approx(60.0, abs=0.01)
 
 
 class TestConstraints:

@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** DisplayService
 - **RPCs:** 11 (3 v1.1.0 charging reports + 8 others)
-- **Total tests:** 30 (was 26; +4 added in Phase 2 round-2 review)
+- **Total tests:** 37 (was 31; +6 added in Phase B for DisplayService with-seeded-data tests)
 - **Strategy:** Focus on validation paths + empty-data responses for v1.1.0 RPCs (COALESCE-on-empty returns zeros). Legacy RPCs fire INTERNAL on empty data — documented, not seeded.
 
 ## TestHappyPath (v1.1.0 charging reports + VehicleCostSummary)
@@ -32,6 +32,24 @@
 - **Action:** Call GetVehicleCostSummary with the vehicle_id and a date range covering all seeded data.
 - **Expected:** total_kwh=70, total_cost=85, avg_yuan_per_kwh=85/70≈1.214, avg_yuan_per_km=85/100=0.85.
 - **Critical implementation note:** The query MUST run inside both the `with TrackedInsert(conn, "charging")` and `with TrackedInsert(conn, "consumption")` blocks so neither `__exit__` cleans up the rows before the query reads them. The consumption block is nested inside the charging block so they're all alive at query time.
+
+### test_get_monthly_charging_report_with_seeded_data_returns_totals
+- 2 charging rows on 2024-06-15 + 16; query month=2024-06 → count=2, kwh=60, cost=70.
+
+### test_get_annual_charging_report_with_seeded_data_returns_totals
+- 3 charging rows across 2024-Q2/Q3; query year=2024 → count=3, kwh=60, cost=75.
+
+### test_get_daily_charging_report_with_seeded_data_returns_count
+- 2 charging rows on 2024-06-15 (different hours); query day=2024-06-15 → count=2, kwh=60.
+
+### test_get_cost_by_charger_type_with_seeded_data_returns_breakdown
+- 2 FAST charging rows; query → 1 breakdown (FAST) with summed totals.
+
+### test_get_cost_by_source_category_with_seeded_data_returns_breakdown
+- 2 charging rows in 1 source_category; query → 1 breakdown with summed totals + source_category_id match.
+
+### test_get_consumption_efficiency_with_seeded_data_returns_efficiency
+- 2 charging rows (60 kwh total) + 1 consumption row (100 km); query → km/kwh ≈ 1.667, kwh/100km ≈ 60.
 
 ## TestErrorPath
 
