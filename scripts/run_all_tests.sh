@@ -135,7 +135,7 @@ if [[ -z "$CONDA_BIN" ]] && command -v conda >/dev/null; then
   CONDA_BIN="$(command -v conda)"
 fi
 if [[ -n "$CONDA_BIN" ]]; then
-  run_suite "python gRPC IT (pytest, ~129 cases)" \
+  run_suite "python gRPC IT (pytest, ~130 cases)" \
     "$CONDA_BIN run -n evgrpc-tests pytest tests/python/ --tb=short -q"
 else
   echo ">>> Skipping python gRPC IT: conda not found on PATH."
