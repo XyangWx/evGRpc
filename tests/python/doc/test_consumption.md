@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** ConsumptionService
 - **RPCs:** CreateConsumption, GetConsumption, UpdateConsumption, DeleteConsumption, ListConsumptions
-- **Total tests:** 18 (was 14; +4 added in Phase 2 round-2 review)
+- **Total tests:** 19 (was 14; +4 in Phase 2, +1 in Phase 3 for UpdateConsumption empty weather_id)
 - **FK deps:** vehicle_id (required NOT NULL); weather_id (DB nullable, but production requires non-empty — see "Constraints" below).
 
 ## TestHappyPath
@@ -67,6 +67,9 @@
 
 ### test_create_consumption_empty_weather_id_returns_invalid
 - **App validation (Phase 3 fix):** `ValidateConsumption` now rejects empty weather_id with INVALID_ARGUMENT. WeatherId is NOT NULL in the DB schema, so the empty string would otherwise hit NOT NULL and produce INTERNAL via the `not_null_violation` → INTERNAL fallback in error.cc.
+
+### test_update_consumption_empty_weather_id_returns_invalid
+- **UpdateConsumption** uses the same `ValidateConsumption` (via a constructed CreateConsumptionRequest-shaped view). Adding this test confirmed the fix works in the update path too.
 
 ## Cross-service (Chunk 6 enables Vehicle FK-delete test)
 
