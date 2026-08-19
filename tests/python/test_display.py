@@ -682,6 +682,113 @@ class TestHappyPathWithSeed:
                 assert e.km_per_kwh == pytest.approx(100.0 / 60.0, abs=0.01)
                 assert e.kwh_per_100km == pytest.approx(60.0, abs=0.01)
 
+    def test_get_range_accuracy_with_seeded_data_returns_accuracy(
+        self, channel, namespace, pg_conn
+    ):
+        """Seed 1 consumption row with begin_range > end_range (dashboard range)
+        and end_mileage > begin_mileage (actual mileage). Verify ratio = actual/dashboard.
+        """
+        from datetime import timedelta
+        from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, wid, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=1, kwh_per=20.0, cost_per=25.0,
+                base_date=(2024, 6, 15),
+            )
+            cn_stub = cn_rpc.ConsumptionServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                start = datetime(2024, 6, 16, 8, 0, 0)
+                end = start + timedelta(hours=2)
+                # Dashboard range: 200-100 = 100 km (BeginRange - EndRange)
+                # Actual mileage: 10200-10000 = 200 km (EndMileage - BeginMileage)
+                # Ratio = 200/100 = 2.0
+                c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start, end=end,
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10200,
+                    begin_range_km=200, end_range_km=100,
+                    highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                    weather_id=wid, remark="range-test",
+                ))
+                co_ti.register(c.id)
+                resp = d_stub.GetRangeAccuracy(pb.GetRangeAccuracyRequest(
+                    vehicle_id=vid,
+                    start_time=datetime(2024, 1, 1),
+                    end_time=datetime(2024, 12, 31),
+                ))
+                assert len(resp.accuracies) == 1
+                a = resp.accuracies[0]
+                assert a.vehicle_id == vid
+                assert a.dashboard_range_total_km == pytest.approx(100.0, abs=0.01)
+                assert a.actual_mileage_total_km == pytest.approx(200.0, abs=0.01)
+                assert a.accuracy_ratio == pytest.approx(2.0, abs=0.01)
+
+    def test_get_temperature_consumption_correlation_with_seeded_data_returns_buckets(
+        self, channel, namespace, pg_conn
+    ):
+        """Seed 2 consumption rows with different avg_temps; verify
+        they fall into the right temperature buckets.
+        """
+        from datetime import timedelta
+        from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
+        from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
+        with TrackedInsert(pg_conn, "vehicle") as v_ti, \
+             TrackedInsert(pg_conn, "weather") as w_ti, \
+             TrackedInsert(pg_conn, "source_category") as sc_ti, \
+             TrackedInsert(pg_conn, "charging") as c_ti:
+            vid, wid, _, d_stub = _seed_vehicle_with_chargings(
+                channel, namespace, pg_conn,
+                v_ti, w_ti, sc_ti, c_ti,
+                n_chargings=2, kwh_per=20.0, cost_per=25.0,
+                base_date=(2024, 6, 15),
+            )
+            cn_stub = cn_rpc.ConsumptionServiceStub(channel)
+            with TrackedInsert(pg_conn, "consumption") as co_ti:
+                # Event 1: avg_temp = 25 (bucket 20-30)
+                start1 = datetime(2024, 6, 16, 8, 0, 0)
+                c1 = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start1, end=start1 + timedelta(hours=1),
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10000, end_mileage_km=10100,
+                    begin_range_km=100, end_range_km=80,
+                    highest_temperature_c=25.0, lowest_temperature_c=25.0,
+                    weather_id=wid, remark="temp-warm",
+                ))
+                co_ti.register(c1.id)
+                # Event 2: avg_temp = 5 (bucket 0-10)
+                start2 = datetime(2024, 6, 17, 8, 0, 0)
+                c2 = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
+                    vehicle_id=vid, start=start2, end=start2 + timedelta(hours=1),
+                    begin_percent=80, end_percent=40,
+                    begin_mileage_km=10100, end_mileage_km=10200,
+                    begin_range_km=80, end_range_km=60,
+                    highest_temperature_c=5.0, lowest_temperature_c=5.0,
+                    weather_id=wid, remark="temp-cool",
+                ))
+                co_ti.register(c2.id)
+                resp = d_stub.GetTemperatureConsumptionCorrelation(
+                    pb.GetTemperatureConsumptionCorrelationRequest(
+                        vehicle_id=vid,
+                        start_time=datetime(2024, 1, 1),
+                        end_time=datetime(2024, 12, 31),
+                    )
+                )
+                # Should have 2 buckets (one per temperature range)
+                assert len(resp.buckets) == 2
+                # Find each bucket by label
+                by_label = {b.label: b for b in resp.buckets}
+                assert "20-30" in by_label
+                assert "0-10" in by_label
+                # Each event had 1 sample + 20km mileage = 20km, 20kwh each
+                assert by_label["20-30"].sample_count == 1
+                assert by_label["0-10"].sample_count == 1
+
 
 class TestConstraints:
     def test_get_monthly_charging_report_with_specific_vehicle(

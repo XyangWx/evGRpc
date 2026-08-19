@@ -3,7 +3,7 @@
 ## Overview
 - **Service:** DisplayService
 - **RPCs:** 11 (3 v1.1.0 charging reports + 8 others)
-- **Total tests:** 37 (was 31; +6 added in Phase B for DisplayService with-seeded-data tests)
+- **Total tests:** 39 (was 37; +2 added in Phase B for GetRangeAccuracy + GetTemperatureConsumptionCorrelation)
 - **Strategy:** Focus on validation paths + empty-data responses for v1.1.0 RPCs (COALESCE-on-empty returns zeros). Legacy RPCs fire INTERNAL on empty data — documented, not seeded.
 
 ## TestHappyPath (v1.1.0 charging reports + VehicleCostSummary)
@@ -50,6 +50,14 @@
 
 ### test_get_consumption_efficiency_with_seeded_data_returns_efficiency
 - 2 charging rows (60 kwh total) + 1 consumption row (100 km); query → km/kwh ≈ 1.667, kwh/100km ≈ 60.
+
+### test_get_range_accuracy_with_seeded_data_returns_accuracy
+- 1 consumption with begin_range_km=200, end_range_km=100 (dashboard = 100km),
+  end_mileage_km - begin_mileage_km = 200km (actual). Query → accuracy_ratio = 200/100 = 2.0.
+
+### test_get_temperature_consumption_correlation_with_seeded_data_returns_buckets
+- 2 consumption rows with different avg_temps (25°C and 5°C); query → 2 buckets ("20-30", "0-10"),
+  each with sample_count=1.
 
 ## TestErrorPath
 
