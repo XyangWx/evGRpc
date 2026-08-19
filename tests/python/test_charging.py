@@ -406,3 +406,41 @@ class TestConstraints:
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateCharging(req)
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+    def test_update_charging_charger_type_unspecified_returns_invalid(
+        self, channel, namespace, pg_conn, vehicle_and_source
+    ):
+        """UpdateCharging with UNSPECIFIED also rejected (via ValidateCharging on view).
+
+        Coverage gap fix: Phase 3 added UNSPECIFIED validation in ValidateCharging.
+        UpdateCharging constructs a CreateChargingRequest-shaped view and calls
+        ValidateCharging, so the same rule applies. Without this test, a future
+        refactor could accidentally bypass the validator.
+        """
+        from tests.python.gen.evgrpc.charging_pb2 import (
+            CreateChargingRequest, UpdateChargingRequest,
+            CHARGER_TYPE_FAST, CHARGER_TYPE_UNSPECIFIED,
+        )
+        from datetime import datetime
+        stub = rpc.ChargingServiceStub(channel)
+        vid, scid = vehicle_and_source
+        # First create a valid charging
+        with TrackedInsert(pg_conn, "charging") as c_ti:
+            create_req = _make_charging_req(vid, scid)
+            created = stub.CreateCharging(create_req)
+            c_ti.register(created.id)
+            # Now try to update with UNSPECIFIED charger type
+            update_req = UpdateChargingRequest(
+                id=created.id,
+                vehicle_id=vid,
+                start_time=datetime(2024, 6, 15, 10, 0, 0),
+                end_time=datetime(2024, 6, 15, 11, 0, 0),
+                start_percent=20, end_percent=80,
+                start_mileage_km=100, end_mileage_km=200,
+                kwh_charged=10.0, cost=10.0, electricity_unit_price=1.0,
+                charger_type=CHARGER_TYPE_UNSPECIFIED,
+                source_category_id=scid,
+                location="loc", remark="rem",
+            )
+            with pytest.raises(grpc.RpcError) as exc:
+                stub.UpdateCharging(update_req)
+            assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT

@@ -493,6 +493,27 @@ TEST_F(ChargingServiceIT, CreateCharging_ChargerTypeUnspecified_InvalidArgument)
       << st.error_message();
 }
 
+// Phase M: UpdateCharging with ChargerType UNSPECIFIED also rejected.
+// Coverage gap fix: UpdateCharging builds a CreateChargingRequest-shaped
+// view and calls ValidateCharging, so the same rule applies. This test
+// guards against future refactors that might bypass the validator.
+TEST_F(ChargingServiceIT, UpdateCharging_ChargerTypeUnspecified_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto sid = data::CreateSourceCategoryId(channel());
+  const auto cid = data::CreateChargingId(channel(), vid, sid);
+  auto stub = ChargingService::NewStub(channel());
+  auto req = data::ToUpdateChargingRequest(
+      data::MakeValidCreateChargingRequest(vid, sid));
+  req.set_id(cid);
+  req.set_charger_type(ChargerType::CHARGER_TYPE_UNSPECIFIED);
+  Charging resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->UpdateCharging(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_NE(st.error_message().find("FAST"), std::string::npos)
+      << st.error_message();
+}
+
 // Phase L: page_size=INT_MAX used to overflow page_size+1 → INT_MIN
 // → PG "LIMIT must not be negative". Now capped to kMaxPageSize-1.
 TEST_F(ChargingServiceIT, ListChargings_IntMaxPageSize_Ok) {
