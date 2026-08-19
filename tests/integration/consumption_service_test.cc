@@ -352,4 +352,20 @@ TEST_F(ConsumptionServiceIT, ListConsumptions_Pagination) {
   EXPECT_EQ(resp2.consumptions_size(), 2);
 }
 
+// Phase M: CreateConsumption with empty weather_id → INVALID_ARGUMENT
+// (Phase 3 fix: ValidateConsumption rejects empty weather_id)
+TEST_F(ConsumptionServiceIT, CreateConsumption_EmptyWeatherId_InvalidArgument) {
+  const auto vid = data::CreateVehicleId(channel());
+  const auto wid = data::CreateWeatherId(pg());
+  auto stub = ConsumptionService::NewStub(channel());
+  auto req = data::MakeValidCreateConsumptionRequest(vid, wid);
+  req.set_weather_id("");  // empty! Phase 3 fix should reject this
+  Consumption resp;
+  grpc::ClientContext ctx;
+  grpc::Status st = stub->CreateConsumption(&ctx, req, &resp);
+  EXPECT_EQ(st.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_NE(st.error_message().find("weather_id is required"), std::string::npos)
+      << st.error_message();
+}
+
 }  // namespace evgrpc::test
