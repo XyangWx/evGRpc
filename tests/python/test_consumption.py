@@ -327,14 +327,12 @@ class TestConstraints:
     def test_create_consumption_empty_weather_id_returns_invalid(
         self, channel, namespace, pg_conn, vehicle_and_weather
     ):
-        """Empty weather_id → INVALID_ARGUMENT (UUID syntax error).
+        """App validation (Phase 3 fix): empty weather_id → INVALID_ARGUMENT.
 
-        Documented production behavior: WeatherId column is nullable in DB
-        (sql/001_initial.sql:39), but production code binds $13 as raw
-        string, so empty string fails UUID cast. The SQL comment claims
-        NULLIF('') wrap, but the actual SQL is just `$13` (production
-        bug — but out of scope to fix here). Documenting the current
-        behavior so a future fix can update this test.
+        WeatherId column is NOT NULL in the schema; empty string would
+        otherwise hit NOT NULL and produce INTERNAL via the
+        not_null_violation → INTERNAL fallback. ValidateConsumption now
+        rejects it with INVALID_ARGUMENT before the SQL.
         """
         stub = rpc.ConsumptionServiceStub(channel)
         vid, _ = vehicle_and_weather
@@ -342,3 +340,38 @@ class TestConstraints:
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateConsumption(req)
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_update_consumption_empty_weather_id_returns_invalid(
+        self, channel, namespace, pg_conn, vehicle_and_weather
+    ):
+        """UpdateConsumption also validates empty weather_id (Phase 3 fix).
+
+        UpdateConsumption builds a CreateConsumptionRequest-shaped view
+        and calls ValidateConsumption, so the same rule applies.
+        """
+        stub = rpc.ConsumptionServiceStub(channel)
+        vid, wid = vehicle_and_weather
+        start = datetime(2024, 6, 15, 10, 0, 0)
+        end = start + timedelta(hours=2)
+        # Create a valid consumption first
+        with TrackedInsert(pg_conn, "consumption") as ti:
+            created = stub.CreateConsumption(
+                _make_consumption_req(vid, wid, start=start, end=end)
+            )
+            ti.register(created.id)
+            # Try to update with empty weather_id
+            update_req = pb.UpdateConsumptionRequest(
+                id=created.id,
+                vehicle_id=vid,
+                start=start,
+                end=end,
+                begin_percent=80, end_percent=40,
+                begin_mileage_km=100, end_mileage_km=200,
+                begin_range_km=320, end_range_km=160,
+                highest_temperature_c=25.0, lowest_temperature_c=15.0,
+                weather_id="",  # empty
+                remark="updated",
+            )
+            with pytest.raises(grpc.RpcError) as exc:
+                stub.UpdateConsumption(update_req)
+            assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
