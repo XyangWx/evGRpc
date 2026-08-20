@@ -7,7 +7,7 @@ FK dependencies: requires a valid vehicle_id + source_category_id (UUID).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import grpc
 import pytest
@@ -34,7 +34,7 @@ def _create_vehicle(stub, namespace, pg_conn):
         brand="test-brand",
         calibrated_range_km=400,
         battery_capacity_kwh=75.0,
-        purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+        purchase_date={"year": 2024, "month": 1, "day": 1},
         license_plate=plate,
     ))
     return resp.id  # caller registers for cleanup
@@ -48,7 +48,7 @@ def _create_source_category(stub, namespace, pg_conn):
 
 def _make_charging_req(vehicle_id, source_category_id, **overrides):
     """Build a CreateChargingRequest with valid defaults."""
-    start = datetime(2024, 6, 15, 10, 0, 0)
+    start = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=1)
     req = pb.CreateChargingRequest(
         vehicle_id=vehicle_id,
@@ -192,8 +192,8 @@ class TestErrorPath:
             stub.UpdateCharging(pb.UpdateChargingRequest(
                 id=make_uuid(),
                 vehicle_id=vid,
-                start_time=datetime(2024, 6, 15, 10, 0, 0),
-                end_time=datetime(2024, 6, 15, 11, 0, 0),
+                start_time=datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2024, 6, 15, 11, 0, 0, tzinfo=timezone.utc),
                 start_percent=20, end_percent=80,
                 start_mileage_km=10000, end_mileage_km=10100,
                 kwh_charged=45.5, cost=50.0, electricity_unit_price=1.10,
@@ -240,7 +240,7 @@ class TestBoundaries:
         """App validation: end_time must be > start_time."""
         stub = rpc.ChargingServiceStub(channel)
         vid, scid = vehicle_and_source
-        t = datetime(2024, 6, 15, 10, 0, 0)
+        t = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
         req = _make_charging_req(vid, scid, start_time=t, end_time=t)
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateCharging(req)
@@ -432,8 +432,8 @@ class TestConstraints:
             update_req = UpdateChargingRequest(
                 id=created.id,
                 vehicle_id=vid,
-                start_time=datetime(2024, 6, 15, 10, 0, 0),
-                end_time=datetime(2024, 6, 15, 11, 0, 0),
+                start_time=datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2024, 6, 15, 11, 0, 0, tzinfo=timezone.utc),
                 start_percent=20, end_percent=80,
                 start_mileage_km=100, end_mileage_km=200,
                 kwh_charged=10.0, cost=10.0, electricity_unit_price=1.0,

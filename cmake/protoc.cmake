@@ -24,6 +24,11 @@ set(EVGRPC_PROTO_FILES
   ${EVGRPC_PROTO_DIR}/evgrpc/consumption.proto
   ${EVGRPC_PROTO_DIR}/evgrpc/charging.proto
   ${EVGRPC_PROTO_DIR}/evgrpc/display.proto
+  # Vendored google.type.Date (not a well-known type; sourced from
+  # googleapis). Required by vehicle.proto since purchase_date's
+  # type was changed from google.protobuf.Timestamp to
+  # google.type.Date.
+  ${EVGRPC_PROTO_DIR}/google/type/date.proto
 )
 
 # Use the protoc binary that FetchContent's protobuf built (4.25 format
@@ -56,6 +61,7 @@ add_custom_command(
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.grpc.pb.cc
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.pb.cc
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/google/type/date.pb.cc
   COMMAND $<TARGET_FILE:protoc>
     --proto_path=${EVGRPC_PROTO_DIR}
     --proto_path=${EVGRPC_WKT_PROTO_DIR}
@@ -85,6 +91,7 @@ add_custom_target(evgrpc_proto_gen ALL
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/charging.grpc.pb.cc
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.pb.cc
     ${EVGRPC_PROTO_GEN_DIR}/evgrpc/display.grpc.pb.cc
+    ${EVGRPC_PROTO_GEN_DIR}/google/type/date.pb.cc
 )
 # Hard-coded grpc_cpp_plugin path (see comment on line 64) loses the
 # implicit target dependency that $<TARGET_FILE:grpc_cpp_plugin>

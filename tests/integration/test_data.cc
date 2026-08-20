@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include <google/type/date.pb.h>
 #include "evgrpc/vehicle.grpc.pb.h"
 #include "evgrpc/source_category.grpc.pb.h"
 #include "evgrpc/charging.grpc.pb.h"
@@ -58,9 +59,11 @@ Vehicle MakeValidVehicle(std::string plate) {
   v.set_brand("Tesla");
   v.set_calibrated_range_km(500);
   v.set_battery_capacity_kwh(75.0);
-  google::protobuf::Timestamp ts;
-  ts.set_seconds(1700000000);   // 2023-11-14 22:13:20 UTC
-  *v.mutable_purchase_date() = ts;
+  google::type::Date d;
+  d.set_year(2023);
+  d.set_month(11);
+  d.set_day(14);
+  *v.mutable_purchase_date() = d;
   v.set_license_plate(plate.empty() ? FreshLicensePlate() : plate);
   return v;
 }
@@ -70,9 +73,11 @@ CreateVehicleRequest MakeValidCreateVehicleRequest(std::string plate) {
   req.set_brand("Tesla");
   req.set_calibrated_range_km(500);
   req.set_battery_capacity_kwh(75.0);
-  google::protobuf::Timestamp ts;
-  ts.set_seconds(1700000000);   // 2023-11-14 22:13:20 UTC
-  *req.mutable_purchase_date() = ts;
+  google::type::Date d;
+  d.set_year(2023);
+  d.set_month(11);
+  d.set_day(14);
+  *req.mutable_purchase_date() = d;
   req.set_license_plate(plate.empty() ? FreshLicensePlate() : plate);
   return req;
 }

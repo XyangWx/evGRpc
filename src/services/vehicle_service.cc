@@ -1,7 +1,8 @@
 #include "services/vehicle_service.h"
 
-#include <google/protobuf/util/time_util.h>
+#include <google/type/date.pb.h>
 #include <pqxx/pqxx>
+#include <string>
 #include "auth/authenticate_rpc.h"
 #include "db/error.h"
 #include "db/exec.h"
@@ -14,11 +15,8 @@ namespace evgrpc {
 namespace {
 
 // Map a SQL row to the Vehicle proto. purchase_date is read as
-// `PurchaseDate::text` (ISO 8601 date string) so we can parse it
-// into google.protobuf.Timestamp without a tz-naive ambiguity.
-//
-// protobuf 4.x renamed BuildFromString -> FromString and the latter
-// returns `bool` (out-param Timestamp*) instead of absl::StatusOr.
+// `PurchaseDate::text` (PG default DateStyle output: `YYYY-MM-DD`)
+// and split on the dashes into a `google.type.Date`.
 Vehicle RowToVehicle(const pqxx::row& r) {
   Vehicle v;
   v.set_id(r["Id"].as<std::string>());
@@ -27,21 +25,29 @@ Vehicle RowToVehicle(const pqxx::row& r) {
   v.set_battery_capacity_kwh(r["BatteryCapacity"].as<double>());
   const auto date_str = r["PurchaseDate"].as<std::string>();
   if (!date_str.empty()) {
-    google::protobuf::Timestamp ts;
-    if (google::protobuf::util::TimeUtil::FromString(
-            date_str + "T00:00:00Z", &ts)) {
-      *v.mutable_purchase_date() = ts;
+    // PG renders DATE as exactly 10 chars: `YYYY-MM-DD`. Anything else
+    // would be a schema drift; we skip rather than guess.
+    if (date_str.size() == 10 && date_str[4] == '-' && date_str[7] == '-') {
+      google::type::Date d;
+      d.set_year(std::stoi(date_str.substr(0, 4)));
+      d.set_month(std::stoi(date_str.substr(5, 2)));
+      d.set_day(std::stoi(date_str.substr(8, 2)));
+      *v.mutable_purchase_date() = d;
     }
   }
   v.set_license_plate(r["LicensePlate"].as<std::string>());
   return v;
 }
 
-// Extract just the first 10 chars (YYYY-MM-DD) from a Timestamp's
-// string form, so we can bind to a `date` column without libpqxx
-// needing a Timestamp parser.
-std::string TimestampDateString(const google::protobuf::Timestamp& ts) {
-  return google::protobuf::util::TimeUtil::ToString(ts).substr(0, 10);
+// Format a `google.type.Date` as `YYYY-MM-DD` for binding to a PG
+// `date` column. Caller guarantees d.year() / d.month() / d.day() are
+// in the valid ranges (the field is a normal int32 and the SQL
+// `DATE` column will reject out-of-range values).
+std::string DateToString(const google::type::Date& d) {
+  char buf[11];
+  std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+                d.year(), d.month(), d.day());
+  return buf;
 }
 
 }  // namespace
@@ -68,7 +74,7 @@ grpc::Status VehicleServiceImpl::CreateVehicle(
         req->brand(),
         req->calibrated_range_km(),
         req->battery_capacity_kwh(),
-        TimestampDateString(req->purchase_date()),
+        DateToString(req->purchase_date()),
         req->license_plate());
     tx.commit();
 
@@ -135,7 +141,7 @@ grpc::Status VehicleServiceImpl::UpdateVehicle(
         req->brand(),
         req->calibrated_range_km(),
         req->battery_capacity_kwh(),
-        TimestampDateString(req->purchase_date()),
+        DateToString(req->purchase_date()),
         req->license_plate());
     if (result.empty()) {
       auto s = grpc::Status(grpc::StatusCode::NOT_FOUND, "vehicle not found");

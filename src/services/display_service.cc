@@ -59,8 +59,8 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
     auto exists = db::Exec(tx,
         "SELECT EXISTS(SELECT 1 FROM charging "
         "WHERE (length($1) = 0 OR VehicleId::text = $1) "
-        "AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
-        "AND ($3::TIMESTAMP IS NULL OR StartTime <= $3)) AS has_data",
+        "AND ($2::TIMESTAMPTZ IS NULL OR StartTime >= $2) "
+        "AND ($3::TIMESTAMPTZ IS NULL OR StartTime <= $3)) AS has_data",
         "DisplayService.GetVehicleCostSummary.exists",
         req->vehicle_id(), start_ts, end_ts);
     if (!exists.empty() && !exists[0][0].as<bool>()) {
@@ -76,14 +76,14 @@ grpc::Status DisplayServiceImpl::GetVehicleCostSummary(
         "         COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "  FROM charging c "
         "  WHERE c.VehicleId::text = $1 "
-        "    AND ($2::TIMESTAMP IS NULL OR c.StartTime >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR c.StartTime <= $3)"
+        "    AND ($2::TIMESTAMPTZ IS NULL OR c.StartTime >= $2) "
+        "    AND ($3::TIMESTAMPTZ IS NULL OR c.StartTime <= $3)"
         "), k AS ("
         "  SELECT COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "  FROM consumption "
         "  WHERE VehicleId::text = $1 "
-        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3)"
+        "    AND ($2::TIMESTAMPTZ IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMPTZ IS NULL OR Start <= $3)"
         ") "
         "SELECT c.total_cost, c.total_kwh, k.total_km FROM c, k",
         "DisplayService.GetVehicleCostSummary",
@@ -306,8 +306,8 @@ grpc::Status DisplayServiceImpl::GetCostByChargerType(
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "FROM charging "
         "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
-        "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "  AND ($2::TIMESTAMPTZ IS NULL OR StartTime >= $2) "
+        "  AND ($3::TIMESTAMPTZ IS NULL OR StartTime <= $3) "
         "GROUP BY ChargerType "
         "ORDER BY ChargerType",
         "DisplayService.GetCostByChargerType",
@@ -364,8 +364,8 @@ grpc::Status DisplayServiceImpl::GetCostBySourceCategory(
         "FROM charging c "
         "JOIN source_category sc ON sc.Id = c.SourceCategoryId "
         "WHERE ($1::TEXT IS NULL OR c.VehicleId::text = $1) "
-        "  AND ($2::TIMESTAMP IS NULL OR c.StartTime >= $2) "
-        "  AND ($3::TIMESTAMP IS NULL OR c.StartTime <= $3) "
+        "  AND ($2::TIMESTAMPTZ IS NULL OR c.StartTime >= $2) "
+        "  AND ($3::TIMESTAMPTZ IS NULL OR c.StartTime <= $3) "
         "GROUP BY c.SourceCategoryId, sc.Name "
         "ORDER BY total_cost DESC",
         "DisplayService.GetCostBySourceCategory",
@@ -424,8 +424,8 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "       COALESCE(SUM(EndMileage - BeginMileage), 0)::DOUBLE PRECISION AS total_km "
         "FROM consumption "
         "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "  AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
-        "  AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
+        "  AND ($2::TIMESTAMPTZ IS NULL OR Start >= $2) "
+        "  AND ($3::TIMESTAMPTZ IS NULL OR Start <= $3) "
         "GROUP BY VehicleId",
         "DisplayService.GetConsumptionEfficiency",
         req->vehicle_id().empty() ? std::optional<std::string>{}
@@ -438,8 +438,8 @@ grpc::Status DisplayServiceImpl::GetConsumptionEfficiency(
         "       COALESCE(SUM(KwhCharged), 0)::DOUBLE PRECISION AS total_kwh "
         "FROM charging "
         "WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "  AND ($2::TIMESTAMP IS NULL OR StartTime >= $2) "
-        "  AND ($3::TIMESTAMP IS NULL OR StartTime <= $3) "
+        "  AND ($2::TIMESTAMPTZ IS NULL OR StartTime >= $2) "
+        "  AND ($3::TIMESTAMPTZ IS NULL OR StartTime <= $3) "
         "GROUP BY VehicleId",
         "DisplayService.GetConsumptionEfficiency",
         req->vehicle_id().empty() ? std::optional<std::string>{}
@@ -508,15 +508,15 @@ grpc::Status DisplayServiceImpl::GetRangeAccuracy(
         "  SELECT VehicleId, SUM(BeginRange - EndRange) AS dashboard_range "
         "  FROM consumption "
         "  WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
+        "    AND ($2::TIMESTAMPTZ IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMPTZ IS NULL OR Start <= $3) "
         "  GROUP BY VehicleId"
         ") d FULL OUTER JOIN ("
         "  SELECT VehicleId, SUM(EndMileage - BeginMileage) AS actual_mileage "
         "  FROM consumption "
         "  WHERE ($1::TEXT IS NULL OR VehicleId::text = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR Start >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR Start <= $3) "
+        "    AND ($2::TIMESTAMPTZ IS NULL OR Start >= $2) "
+        "    AND ($3::TIMESTAMPTZ IS NULL OR Start <= $3) "
         "  GROUP BY VehicleId"
         ") m ON d.VehicleId = m.VehicleId",
         "DisplayService.GetRangeAccuracy",
@@ -589,8 +589,8 @@ grpc::Status DisplayServiceImpl::GetTemperatureConsumptionCorrelation(
         "    ), 0)::DOUBLE PRECISION AS kwh "
         "  FROM consumption c "
         "  WHERE ($1::TEXT IS NULL OR c.VehicleId::text = $1) "
-        "    AND ($2::TIMESTAMP IS NULL OR c.Start >= $2) "
-        "    AND ($3::TIMESTAMP IS NULL OR c.Start <= $3) "
+        "    AND ($2::TIMESTAMPTZ IS NULL OR c.Start >= $2) "
+        "    AND ($3::TIMESTAMPTZ IS NULL OR c.Start <= $3) "
         "    AND (c.EndMileage - c.BeginMileage) > 0"
         ") "
         "SELECT "
@@ -671,7 +671,12 @@ grpc::Status DisplayServiceImpl::GetDailyChargingReport(
         "  COALESCE(SUM(c.KwhCharged), 0)::DOUBLE PRECISION AS total_kwh, "
         "  COUNT(*)::INT AS count "
         "FROM charging c "
-        "WHERE c.StartTime::date = make_date($1, $2, $3) "
+        // Pin the timestamp->date conversion to UTC. Without
+        // `AT TIME ZONE 'UTC'`, the session TZ (now locked to UTC by
+        // PgPool, but historically inherited from the postmaster) would
+        // decide which calendar day a row belongs to. See schema
+        // migration 003's NOTE for the boundary-shift risk.
+        "WHERE (c.StartTime AT TIME ZONE 'UTC')::date = make_date($1, $2, $3) "
         "  AND (length($4) = 0 OR c.VehicleId::text = $4)";
     auto result = db::Exec(tx, sql, "DisplayService.GetDailyChargingReport", p);
     resp->set_year(req->year());

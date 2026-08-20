@@ -14,7 +14,7 @@ zero data — out of scope to seed, so we just verify the validation paths.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import grpc
 import pytest
@@ -88,8 +88,8 @@ class TestHappyPath:
             stub.GetVehicleCostSummary(
                 pb.GetVehicleCostSummaryRequest(
                     vehicle_id=make_uuid(),
-                    start_time=datetime(2024, 1, 1),
-                    end_time=datetime(2024, 12, 31),
+                    start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 )
             )
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
@@ -103,8 +103,8 @@ class TestHappyPath:
             stub.GetVehicleCostSummary(
                 pb.GetVehicleCostSummaryRequest(
                     vehicle_id="",
-                    start_time=datetime(2024, 1, 1),
-                    end_time=datetime(2024, 12, 31),
+                    start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 )
             )
         assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
@@ -129,7 +129,7 @@ def _seed_vehicle_with_chargings(
 
     Returns (vid, wid, scid, d_stub).
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from tests.python._helpers import (
         make_license_plate, make_source_category_name, make_weather_name,
     )
@@ -150,7 +150,7 @@ def _seed_vehicle_with_chargings(
 
     vid = v_stub.CreateVehicle(v_pb.CreateVehicleRequest(
         brand="test", calibrated_range_km=400, battery_capacity_kwh=75.0,
-        purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+        purchase_date={"year": 2024, "month": 1, "day": 1},
         license_plate=make_license_plate(namespace),
     )).id
     v_ti.register(vid)
@@ -170,7 +170,7 @@ def _seed_vehicle_with_chargings(
         # Offset start time by (i * duration_hours) hours so multiple
         # rows fit on the same day when duration_hours < 24/day.
         # Default (duration_hours=1) gives rows on consecutive days.
-        start = datetime(base_date[0], base_date[1], base_date[2], base_hour, 0, 0) + timedelta(hours=i * duration_hours)
+        start = datetime(base_date[0], base_date[1], base_date[2], base_hour, 0, 0, tzinfo=timezone.utc) + timedelta(hours=i * duration_hours)
         end = start + timedelta(hours=duration_hours)
         c = c_stub.CreateCharging(c_pb.CreateChargingRequest(
             vehicle_id=vid, start_time=start, end_time=end,
@@ -429,7 +429,7 @@ class TestHappyPathWithSeed:
              TrackedInsert(pg_conn, "source_category") as sc_ti:
             vid = v_stub.CreateVehicle(v_pb.CreateVehicleRequest(
                 brand="test", calibrated_range_km=400, battery_capacity_kwh=75.0,
-                purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+                purchase_date={"year": 2024, "month": 1, "day": 1},
                 license_plate=make_license_plate(namespace),
             )).id
             v_ti.register(vid)
@@ -449,8 +449,8 @@ class TestHappyPathWithSeed:
             # the outer block.
             with TrackedInsert(pg_conn, "charging") as c_ti:
                 for i, percent_end in enumerate([60, 90]):
-                    start = datetime(2024, 6, 15 + i, 10, 0, 0)
-                    end = datetime(2024, 6, 15 + i, 11, 0, 0)
+                    start = datetime(2024, 6, 15 + i, 10, 0, 0, tzinfo=timezone.utc)
+                    end = datetime(2024, 6, 15 + i, 11, 0, 0, tzinfo=timezone.utc)
                     c_stub.CreateCharging(c_pb.CreateChargingRequest(
                         vehicle_id=vid, start_time=start, end_time=end,
                         start_percent=20, end_percent=percent_end,
@@ -472,7 +472,7 @@ class TestHappyPathWithSeed:
                 # with-block so it stays alive during the query.
                 from datetime import timedelta
                 with TrackedInsert(pg_conn, "consumption") as co_ti:
-                    start = datetime(2024, 6, 16, 8, 0, 0)
+                    start = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                     end = start + timedelta(hours=2)
                     from tests.python.gen.evgrpc import consumption_pb2 as cn_pb
                     from tests.python.gen.evgrpc import consumption_pb2_grpc as cn_rpc
@@ -491,8 +491,8 @@ class TestHappyPathWithSeed:
                     # all rows still exist.
                     resp = d_stub.GetVehicleCostSummary(pb.GetVehicleCostSummaryRequest(
                         vehicle_id=vid,
-                        start_time=datetime(2024, 1, 1),
-                        end_time=datetime(2024, 12, 31),
+                        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                        end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                     ))
 
                     # Verify totals (30 + 40 = 70 kwh, 35 + 50 = 85 cost)
@@ -596,8 +596,8 @@ class TestHappyPathWithSeed:
             )
             resp = d_stub.GetCostByChargerType(pb.GetCostByChargerTypeRequest(
                 vehicle_id=vid,
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             ))
             assert len(resp.breakdowns) == 1
             b = resp.breakdowns[0]
@@ -624,8 +624,8 @@ class TestHappyPathWithSeed:
             )
             resp = d_stub.GetCostBySourceCategory(pb.GetCostBySourceCategoryRequest(
                 vehicle_id=vid,
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             ))
             assert len(resp.breakdowns) == 1
             b = resp.breakdowns[0]
@@ -656,7 +656,7 @@ class TestHappyPathWithSeed:
             )
             cn_stub = cn_rpc.ConsumptionServiceStub(channel)
             with TrackedInsert(pg_conn, "consumption") as co_ti:
-                start = datetime(2024, 6, 16, 8, 0, 0)
+                start = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                 end = start + timedelta(hours=2)
                 c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
                     vehicle_id=vid, start=start, end=end,
@@ -670,8 +670,8 @@ class TestHappyPathWithSeed:
                 resp = d_stub.GetConsumptionEfficiency(
                     pb.GetConsumptionEfficiencyRequest(
                         vehicle_id=vid,
-                        start_time=datetime(2024, 1, 1),
-                        end_time=datetime(2024, 12, 31),
+                        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                        end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                     )
                 )
                 assert len(resp.efficiencies) == 1
@@ -703,7 +703,7 @@ class TestHappyPathWithSeed:
             )
             cn_stub = cn_rpc.ConsumptionServiceStub(channel)
             with TrackedInsert(pg_conn, "consumption") as co_ti:
-                start = datetime(2024, 6, 16, 8, 0, 0)
+                start = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                 end = start + timedelta(hours=2)
                 # Dashboard range: 200-100 = 100 km (BeginRange - EndRange)
                 # Actual mileage: 10200-10000 = 200 km (EndMileage - BeginMileage)
@@ -719,8 +719,8 @@ class TestHappyPathWithSeed:
                 co_ti.register(c.id)
                 resp = d_stub.GetRangeAccuracy(pb.GetRangeAccuracyRequest(
                     vehicle_id=vid,
-                    start_time=datetime(2024, 1, 1),
-                    end_time=datetime(2024, 12, 31),
+                    start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                 ))
                 assert len(resp.accuracies) == 1
                 a = resp.accuracies[0]
@@ -751,7 +751,7 @@ class TestHappyPathWithSeed:
             cn_stub = cn_rpc.ConsumptionServiceStub(channel)
             with TrackedInsert(pg_conn, "consumption") as co_ti:
                 # Event 1: avg_temp = 25 (bucket 20-30)
-                start1 = datetime(2024, 6, 16, 8, 0, 0)
+                start1 = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                 c1 = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
                     vehicle_id=vid, start=start1, end=start1 + timedelta(hours=1),
                     begin_percent=80, end_percent=40,
@@ -762,7 +762,7 @@ class TestHappyPathWithSeed:
                 ))
                 co_ti.register(c1.id)
                 # Event 2: avg_temp = 5 (bucket 0-10)
-                start2 = datetime(2024, 6, 17, 8, 0, 0)
+                start2 = datetime(2024, 6, 17, 8, 0, 0, tzinfo=timezone.utc)
                 c2 = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
                     vehicle_id=vid, start=start2, end=start2 + timedelta(hours=1),
                     begin_percent=80, end_percent=40,
@@ -775,8 +775,8 @@ class TestHappyPathWithSeed:
                 resp = d_stub.GetTemperatureConsumptionCorrelation(
                     pb.GetTemperatureConsumptionCorrelationRequest(
                         vehicle_id=vid,
-                        start_time=datetime(2024, 1, 1),
-                        end_time=datetime(2024, 12, 31),
+                        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                        end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
                     )
                 )
                 # Should have 2 buckets (one per temperature range)
@@ -814,7 +814,7 @@ class TestHappyPathWithSeed:
             # Create 1 consumption row with 100km mileage for 2024-06
             cn_stub = cn_rpc.ConsumptionServiceStub(channel)
             with TrackedInsert(pg_conn, "consumption") as co_ti:
-                start = datetime(2024, 6, 16, 8, 0, 0)
+                start = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                 end = start + timedelta(hours=2)
                 c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
                     vehicle_id=vid, start=start, end=end,
@@ -860,7 +860,7 @@ class TestHappyPathWithSeed:
             )
             cn_stub = cn_rpc.ConsumptionServiceStub(channel)
             with TrackedInsert(pg_conn, "consumption") as co_ti:
-                start = datetime(2024, 2, 20, 8, 0, 0)
+                start = datetime(2024, 2, 20, 8, 0, 0, tzinfo=timezone.utc)
                 c = cn_stub.CreateConsumption(cn_pb.CreateConsumptionRequest(
                     vehicle_id=vid, start=start, end=start + timedelta(hours=2),
                     begin_percent=80, end_percent=40,
@@ -913,8 +913,8 @@ class TestConstraints:
         resp = stub.GetCostByChargerType(
             pb.GetCostByChargerTypeRequest(
                 vehicle_id=make_uuid(),
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             )
         )
         assert isinstance(resp, pb.GetCostByChargerTypeResponse)
@@ -927,8 +927,8 @@ class TestConstraints:
         resp = stub.GetCostBySourceCategory(
             pb.GetCostBySourceCategoryRequest(
                 vehicle_id=make_uuid(),
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             )
         )
         assert isinstance(resp, pb.GetCostBySourceCategoryResponse)
@@ -941,8 +941,8 @@ class TestConstraints:
         resp = stub.GetConsumptionEfficiency(
             pb.GetConsumptionEfficiencyRequest(
                 vehicle_id=make_uuid(),
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             )
         )
         assert isinstance(resp, pb.GetConsumptionEfficiencyResponse)
@@ -954,8 +954,8 @@ class TestConstraints:
         resp = stub.GetRangeAccuracy(
             pb.GetRangeAccuracyRequest(
                 vehicle_id=make_uuid(),
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             )
         )
         assert isinstance(resp, pb.GetRangeAccuracyResponse)
@@ -967,8 +967,8 @@ class TestConstraints:
         resp = stub.GetTemperatureConsumptionCorrelation(
             pb.GetTemperatureConsumptionCorrelationRequest(
                 vehicle_id=make_uuid(),
-                start_time=datetime(2024, 1, 1),
-                end_time=datetime(2024, 12, 31),
+                start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2024, 12, 31, tzinfo=timezone.utc),
             )
         )
         assert isinstance(resp, pb.GetTemperatureConsumptionCorrelationResponse)
@@ -1023,7 +1023,7 @@ class TestTimestampBoundary:
              TrackedInsert(pg_conn, "consumption") as co_ti:
             vid = v_stub.CreateVehicle(CreateVehicleRequest(
                 brand="test", calibrated_range_km=400, battery_capacity_kwh=75.0,
-                purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+                purchase_date={"year": 2024, "month": 1, "day": 1},
                 license_plate=make_license_plate(namespace),
             )).id
             v_ti.register(vid)
@@ -1047,8 +1047,8 @@ class TestTimestampBoundary:
             with TrackedInsert(pg_conn, "consumption") as co_ti:
                 from datetime import timedelta
                 c_charging = c_stub.CreateCharging(CreateChargingRequest(
-                    vehicle_id=vid, start_time=datetime(2024, 6, 15, 10, 0, 0),
-                    end_time=datetime(2024, 6, 15, 11, 0, 0),
+                    vehicle_id=vid, start_time=datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    end_time=datetime(2024, 6, 15, 11, 0, 0, tzinfo=timezone.utc),
                     start_percent=20, end_percent=80,
                     start_mileage_km=10000, end_mileage_km=10100,
                     kwh_charged=30.0, cost=35.0, electricity_unit_price=1.0,
@@ -1056,7 +1056,7 @@ class TestTimestampBoundary:
                     location="loc", remark="phase-q",
                 ))
                 c_ti.register(c_charging.id)
-                start = datetime(2024, 6, 16, 8, 0, 0)
+                start = datetime(2024, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
                 c = cn_stub.CreateConsumption(CreateConsumptionRequest(
                     vehicle_id=vid, start=start, end=start + timedelta(hours=2),
                     begin_percent=80, end_percent=40,
@@ -1071,7 +1071,7 @@ class TestTimestampBoundary:
                 # still match 2024-06-15 by accident, but in OTHER cases
                 # where only PRE-1970 data exists, behavior would diverge).
                 ts = Timestamp()
-                ts.FromDatetime(datetime(1970, 1, 1, 0, 0, 0))
+                ts.FromDatetime(datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc))
                 resp = d_stub.GetVehicleCostSummary(pb.GetVehicleCostSummaryRequest(
                     vehicle_id=vid,
                     start_time=ts,

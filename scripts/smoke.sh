@@ -232,7 +232,7 @@ CREATE_RESP=$(
     -H "Authorization: Bearer $JWT" \
     -import-path "$PROTO_ROOT" \
     -proto evgrpc/vehicle.proto \
-    -d "{\"brand\":\"Tesla\",\"calibrated_range_km\":500,\"battery_capacity_kwh\":75.0,\"purchase_date\":\"2024-01-01T00:00:00Z\",\"license_plate\":\"$PLATE\"}" \
+    -d "{\"brand\":\"Tesla\",\"calibrated_range_km\":500,\"battery_capacity_kwh\":75.0,\"purchase_date\":{\"year\":2024,\"month\":1,\"day\":1},\"license_plate\":\"$PLATE\"}" \
     "127.0.0.1:$GRPC_PORT" evgrpc.VehicleService/CreateVehicle
 )
 echo "$CREATE_RESP"

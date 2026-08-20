@@ -8,7 +8,6 @@
 // e2e coverage expands in Task 22 (smoke.sh + the e2e suite proper).
 
 #include <grpcpp/grpcpp.h>
-#include <google/protobuf/timestamp.pb.h>
 #include <gtest/gtest.h>
 #include <pqxx/pqxx>
 
@@ -42,8 +41,10 @@ TEST(E2ESmoke, CreateThenListVehicle) {
   req.set_brand("Tesla");
   req.set_calibrated_range_km(500);
   req.set_battery_capacity_kwh(75.0);
-  google::protobuf::Timestamp purchase_date;
-  purchase_date.set_seconds(1704067200);  // 2024-01-01T00:00:00Z
+  google::type::Date purchase_date;
+  purchase_date.set_year(2024);
+  purchase_date.set_month(1);
+  purchase_date.set_day(1);
   *req.mutable_purchase_date() = purchase_date;
   req.set_license_plate("TEST123");
 
@@ -95,8 +96,10 @@ TEST(E2ESmokeNoAuth, CreateVehicleWithoutToken) {
   req.set_brand("Tesla");
   req.set_calibrated_range_km(500);
   req.set_battery_capacity_kwh(75.0);
-  google::protobuf::Timestamp purchase_date;
-  purchase_date.set_seconds(1704067200);  // 2024-01-01T00:00:00Z
+  google::type::Date purchase_date;
+  purchase_date.set_year(2024);
+  purchase_date.set_month(1);
+  purchase_date.set_day(1);
   *req.mutable_purchase_date() = purchase_date;
   req.set_license_plate("NOAUTH1");
 

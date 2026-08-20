@@ -28,6 +28,10 @@ from tests.python._helpers import (
 )
 from tests.python.gen.evgrpc import vehicle_pb2 as pb
 from tests.python.gen.evgrpc import vehicle_pb2_grpc as rpc
+# Google API protoc generates Date class — assignment to a message field
+# requires a Date instance, not a dict. Used for the boundary tests
+# that override the helper's default purchase_date.
+from tests.python.gen.google.type import date_pb2
 
 
 def _make_create_req(ns: str, plate_len: int | None = None):
@@ -44,7 +48,7 @@ def _make_create_req(ns: str, plate_len: int | None = None):
         brand="test-brand",
         calibrated_range_km=400,
         battery_capacity_kwh=75.0,
-        purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+        purchase_date={"year": 2024, "month": 1, "day": 1},
         license_plate=plate,
     )
 
@@ -145,7 +149,7 @@ class TestErrorPath:
             stub.UpdateVehicle(pb.UpdateVehicleRequest(
                 id=make_uuid(),
                 brand="x", calibrated_range_km=1, battery_capacity_kwh=1.0,
-                purchase_date=datetime(2024, 1, 1, 0, 0, 0), license_plate="x",
+                purchase_date={"year": 2024, "month": 1, "day": 1}, license_plate="x",
             ))
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
@@ -367,14 +371,11 @@ class TestBoundaries:
         """DATE 1900-01-01 is accepted (no lower bound enforced)."""
         stub = rpc.VehicleServiceStub(channel)
         req = _make_create_req(namespace)
-        req.purchase_date = datetime(1900, 1, 1, 0, 0, 0)
+        req.purchase_date.CopyFrom(date_pb2.Date(year=1900, month=1, day=1))
         with TrackedInsert(pg_conn, "vehicle") as ti:
             resp = stub.CreateVehicle(req)
             ti.register(resp.id)
-        # Convert protobuf Timestamp → datetime for the assertion
-        ts = resp.purchase_date
-        dt = datetime.fromtimestamp(ts.seconds, tz=timezone.utc)
-        assert dt.year == 1900
+        assert resp.purchase_date.year == 1900
 
     def test_create_vehicle_future_purchase_date_accepted(
         self, channel, namespace, pg_conn
@@ -382,13 +383,11 @@ class TestBoundaries:
         """DATE in the future is accepted (no upper bound)."""
         stub = rpc.VehicleServiceStub(channel)
         req = _make_create_req(namespace)
-        req.purchase_date = datetime(2099, 12, 31, 0, 0, 0)
+        req.purchase_date.CopyFrom(date_pb2.Date(year=2099, month=12, day=31))
         with TrackedInsert(pg_conn, "vehicle") as ti:
             resp = stub.CreateVehicle(req)
             ti.register(resp.id)
-        ts = resp.purchase_date
-        dt = datetime.fromtimestamp(ts.seconds, tz=timezone.utc)
-        assert dt.year == 2099
+        assert resp.purchase_date.year == 2099
 
     def test_update_vehicle_change_license_plate(
         self, channel, namespace, pg_conn
@@ -532,7 +531,7 @@ class TestConstraints:
                 brand="test-brand",
                 calibrated_range_km=400,
                 battery_capacity_kwh=75.0,
-                purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+                purchase_date={"year": 2024, "month": 1, "day": 1},
                 license_plate=plate,
             ))
             v_ti.register(v.id)
@@ -541,7 +540,7 @@ class TestConstraints:
             w_ti.register(w.id)
 
             # Create consumption referencing V (FK to vehicle).
-            start = datetime(2024, 6, 15, 10, 0, 0)
+            start = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
             c = c_stub.CreateConsumption(c_pb.CreateConsumptionRequest(
                 vehicle_id=v.id,
                 start=start,

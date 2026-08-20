@@ -20,6 +20,9 @@ add_library(evgrpc_proto
   ${CMAKE_BINARY_DIR}/generated/evgrpc/charging.grpc.pb.cc
   ${CMAKE_BINARY_DIR}/generated/evgrpc/display.pb.cc
   ${CMAKE_BINARY_DIR}/generated/evgrpc/display.grpc.pb.cc
+  # Vendored google.type.Date. Compiled like any other proto-generated
+  # file but lives outside the evgrpc/ tree.
+  ${CMAKE_BINARY_DIR}/generated/google/type/date.pb.cc
 )
 target_include_directories(evgrpc_proto PUBLIC ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(evgrpc_proto PUBLIC

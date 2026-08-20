@@ -2,7 +2,24 @@
 
 from __future__ import annotations
 
+# Force UTC for the entire test session BEFORE any other import. Without
+# this, naive `datetime(...)` values get encoded as local time when sent
+# through protobuf's `Timestamp.FromDatetime` (which treats naive
+# datetime as **local**), and any code path that calls `datetime.now()`
+# / `time.localtime()` inherits the host TZ. Tests that already use
+# `tzinfo=timezone.utc` are unaffected by this; tests that still pass
+# naive `datetime(...)` will be caught by an explicit assertion in the
+# module-level `_helpers` guard or by the codemod that rewrote them.
 import os
+os.environ['TZ'] = 'UTC'
+try:
+    import time as _time
+    _time.tzset()
+except (AttributeError, OSError):
+    # tzset() may be unavailable on some platforms (notably Windows).
+    # Project targets are Linux/macOS, where this always succeeds.
+    pass
+
 import subprocess
 import time
 import uuid

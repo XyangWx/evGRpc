@@ -17,7 +17,23 @@ PgConn::PgConn(PgConn&& other) noexcept
 
 PgPool::PgPool(const std::string& url, int size) : url_(url), size_(size) {
   for (int i = 0; i < size_; ++i) {
-    idle_.push(std::make_unique<pqxx::connection>(url_));
+    auto conn = std::make_unique<pqxx::connection>(url_);
+    // Pin session TZ to UTC. Without this, every session-TZ-sensitive
+    // expression (e.g. `TIMESTAMPTZ::date`, `text::TIMESTAMP`) inherits
+    // the postmaster's TZ, which is deployment-dependent. Our C++ code
+    // binds TIMESTAMPTZ parameters from `TimeUtil::ToString` (always
+    // trailing `Z`) and writes `TIMESTAMPTZ` columns, so the session TZ
+    // is not actually needed for correctness once the bound strings are
+    // parsed as TIMESTAMPTZ — but pinning it eliminates one whole class
+    // of session-TZ-dependent bugs and makes any ad-hoc SQL written
+    // against this pool behave identically across hosts.
+    //
+    // pqxx 7.9 made `connection::exec` private, so we run the SET
+    // through a nontransaction (matches the pattern used everywhere
+    // else in this codebase).
+    pqxx::nontransaction setup(*conn);
+    setup.exec("SET TIME ZONE 'UTC'");
+    idle_.push(std::move(conn));
   }
 }
 

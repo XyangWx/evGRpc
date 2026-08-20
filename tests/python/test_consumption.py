@@ -8,7 +8,7 @@ FK deps: vehicle_id (required), weather_id (optional/nullable).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import grpc
 import pytest
@@ -35,7 +35,7 @@ def _create_vehicle(stub, namespace):
         brand="test-brand",
         calibrated_range_km=400,
         battery_capacity_kwh=75.0,
-        purchase_date=datetime(2024, 1, 1, 0, 0, 0),
+        purchase_date={"year": 2024, "month": 1, "day": 1},
         license_plate=plate,
     )).id
 
@@ -46,7 +46,7 @@ def _create_weather(stub, namespace):
 
 
 def _make_consumption_req(vehicle_id, weather_id=None, **overrides):
-    start = datetime(2024, 6, 15, 10, 0, 0)
+    start = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
     end = start + timedelta(hours=2)
     req = pb.CreateConsumptionRequest(
         vehicle_id=vehicle_id,
@@ -187,8 +187,8 @@ class TestErrorPath:
             stub.UpdateConsumption(pb.UpdateConsumptionRequest(
                 id=make_uuid(),
                 vehicle_id=vid,
-                start=datetime(2024, 6, 15, 10, 0, 0),
-                end=datetime(2024, 6, 15, 12, 0, 0),
+                start=datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc),
+                end=datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc),
                 begin_percent=80, end_percent=40,
                 begin_mileage_km=100, end_mileage_km=200,
                 begin_range_km=320, end_range_km=160,
@@ -234,7 +234,7 @@ class TestBoundaries:
         """App validation: end > start."""
         stub = rpc.ConsumptionServiceStub(channel)
         vid, wid = vehicle_and_weather
-        t = datetime(2024, 6, 15, 10, 0, 0)
+        t = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
         req = _make_consumption_req(vid, wid, start=t, end=t)
         with pytest.raises(grpc.RpcError) as exc:
             stub.CreateConsumption(req)
@@ -311,8 +311,8 @@ class TestBoundaries:
         """TIMESTAMPTZ allows any year (PG range: 4713 BC to 294276 AD)."""
         stub = rpc.ConsumptionServiceStub(channel)
         vid, wid = vehicle_and_weather
-        start = datetime(1990, 1, 1, 0, 0, 0)
-        end = datetime(1990, 1, 1, 2, 0, 0)
+        start = datetime(1990, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = datetime(1990, 1, 1, 2, 0, 0, tzinfo=timezone.utc)
         req = _make_consumption_req(vid, wid, start=start, end=end)
         with TrackedInsert(pg_conn, "consumption") as ti:
             resp = stub.CreateConsumption(req)
@@ -372,7 +372,7 @@ class TestConstraints:
         """
         stub = rpc.ConsumptionServiceStub(channel)
         vid, wid = vehicle_and_weather
-        start = datetime(2024, 6, 15, 10, 0, 0)
+        start = datetime(2024, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(hours=2)
         # Create a valid consumption first
         with TrackedInsert(pg_conn, "consumption") as ti:

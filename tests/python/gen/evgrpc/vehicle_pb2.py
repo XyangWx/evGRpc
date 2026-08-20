@@ -22,32 +22,32 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
+from tests.python.gen.google.type import date_pb2 as google_dot_type_dot_date__pb2
 from . import common_pb2 as evgrpc_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x65vgrpc/vehicle.proto\x12\x06\x65vgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x13\x65vgrpc/common.proto\"\xa9\x01\n\x07Vehicle\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05\x62rand\x18\x02 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x03 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x04 \x01(\x01\x12\x31\n\rpurchase_date\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x15\n\rlicense_plate\x18\x06 \x01(\t\"\xaa\x01\n\x14\x43reateVehicleRequest\x12\r\n\x05\x62rand\x18\x01 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x02 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x03 \x01(\x01\x12\x31\n\rpurchase_date\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x15\n\rlicense_plate\x18\x05 \x01(\t\"\x1f\n\x11GetVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\"\xb6\x01\n\x14UpdateVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05\x62rand\x18\x02 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x03 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x04 \x01(\x01\x12\x31\n\rpurchase_date\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x15\n\rlicense_plate\x18\x06 \x01(\t\"\"\n\x14\x44\x65leteVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\"<\n\x13ListVehiclesRequest\x12\x11\n\tpage_size\x18\x01 \x01(\x05\x12\x12\n\npage_token\x18\x02 \x01(\t\"R\n\x14ListVehiclesResponse\x12!\n\x08vehicles\x18\x01 \x03(\x0b\x32\x0f.evgrpc.Vehicle\x12\x17\n\x0fnext_page_token\x18\x02 \x01(\t2\xdc\x02\n\x0eVehicleService\x12>\n\rCreateVehicle\x12\x1c.evgrpc.CreateVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12\x38\n\nGetVehicle\x12\x19.evgrpc.GetVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12>\n\rUpdateVehicle\x12\x1c.evgrpc.UpdateVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12\x45\n\rDeleteVehicle\x12\x1c.evgrpc.DeleteVehicleRequest\x1a\x16.google.protobuf.Empty\x12I\n\x0cListVehicles\x12\x1b.evgrpc.ListVehiclesRequest\x1a\x1c.evgrpc.ListVehiclesResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x65vgrpc/vehicle.proto\x12\x06\x65vgrpc\x1a\x1bgoogle/protobuf/empty.proto\x1a\x16google/type/date.proto\x1a\x13\x65vgrpc/common.proto\"\xa0\x01\n\x07Vehicle\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05\x62rand\x18\x02 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x03 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x04 \x01(\x01\x12(\n\rpurchase_date\x18\x05 \x01(\x0b\x32\x11.google.type.Date\x12\x15\n\rlicense_plate\x18\x06 \x01(\t\"\xa1\x01\n\x14\x43reateVehicleRequest\x12\r\n\x05\x62rand\x18\x01 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x02 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x03 \x01(\x01\x12(\n\rpurchase_date\x18\x04 \x01(\x0b\x32\x11.google.type.Date\x12\x15\n\rlicense_plate\x18\x05 \x01(\t\"\x1f\n\x11GetVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\"\xad\x01\n\x14UpdateVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05\x62rand\x18\x02 \x01(\t\x12\x1b\n\x13\x63\x61librated_range_km\x18\x03 \x01(\x05\x12\x1c\n\x14\x62\x61ttery_capacity_kwh\x18\x04 \x01(\x01\x12(\n\rpurchase_date\x18\x05 \x01(\x0b\x32\x11.google.type.Date\x12\x15\n\rlicense_plate\x18\x06 \x01(\t\"\"\n\x14\x44\x65leteVehicleRequest\x12\n\n\x02id\x18\x01 \x01(\t\"<\n\x13ListVehiclesRequest\x12\x11\n\tpage_size\x18\x01 \x01(\x05\x12\x12\n\npage_token\x18\x02 \x01(\t\"R\n\x14ListVehiclesResponse\x12!\n\x08vehicles\x18\x01 \x03(\x0b\x32\x0f.evgrpc.Vehicle\x12\x17\n\x0fnext_page_token\x18\x02 \x01(\t2\xdc\x02\n\x0eVehicleService\x12>\n\rCreateVehicle\x12\x1c.evgrpc.CreateVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12\x38\n\nGetVehicle\x12\x19.evgrpc.GetVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12>\n\rUpdateVehicle\x12\x1c.evgrpc.UpdateVehicleRequest\x1a\x0f.evgrpc.Vehicle\x12\x45\n\rDeleteVehicle\x12\x1c.evgrpc.DeleteVehicleRequest\x1a\x16.google.protobuf.Empty\x12I\n\x0cListVehicles\x12\x1b.evgrpc.ListVehiclesRequest\x1a\x1c.evgrpc.ListVehiclesResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'evgrpc.vehicle_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_VEHICLE']._serialized_start=116
-  _globals['_VEHICLE']._serialized_end=285
-  _globals['_CREATEVEHICLEREQUEST']._serialized_start=288
-  _globals['_CREATEVEHICLEREQUEST']._serialized_end=458
-  _globals['_GETVEHICLEREQUEST']._serialized_start=460
-  _globals['_GETVEHICLEREQUEST']._serialized_end=491
-  _globals['_UPDATEVEHICLEREQUEST']._serialized_start=494
-  _globals['_UPDATEVEHICLEREQUEST']._serialized_end=676
-  _globals['_DELETEVEHICLEREQUEST']._serialized_start=678
-  _globals['_DELETEVEHICLEREQUEST']._serialized_end=712
-  _globals['_LISTVEHICLESREQUEST']._serialized_start=714
-  _globals['_LISTVEHICLESREQUEST']._serialized_end=774
-  _globals['_LISTVEHICLESRESPONSE']._serialized_start=776
-  _globals['_LISTVEHICLESRESPONSE']._serialized_end=858
-  _globals['_VEHICLESERVICE']._serialized_start=861
-  _globals['_VEHICLESERVICE']._serialized_end=1209
+  _globals['_VEHICLE']._serialized_start=107
+  _globals['_VEHICLE']._serialized_end=267
+  _globals['_CREATEVEHICLEREQUEST']._serialized_start=270
+  _globals['_CREATEVEHICLEREQUEST']._serialized_end=431
+  _globals['_GETVEHICLEREQUEST']._serialized_start=433
+  _globals['_GETVEHICLEREQUEST']._serialized_end=464
+  _globals['_UPDATEVEHICLEREQUEST']._serialized_start=467
+  _globals['_UPDATEVEHICLEREQUEST']._serialized_end=640
+  _globals['_DELETEVEHICLEREQUEST']._serialized_start=642
+  _globals['_DELETEVEHICLEREQUEST']._serialized_end=676
+  _globals['_LISTVEHICLESREQUEST']._serialized_start=678
+  _globals['_LISTVEHICLESREQUEST']._serialized_end=738
+  _globals['_LISTVEHICLESRESPONSE']._serialized_start=740
+  _globals['_LISTVEHICLESRESPONSE']._serialized_end=822
+  _globals['_VEHICLESERVICE']._serialized_start=825
+  _globals['_VEHICLESERVICE']._serialized_end=1173
 # @@protoc_insertion_point(module_scope)
